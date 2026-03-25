@@ -1,11 +1,35 @@
-# 方便将 src 安装为包，避免 import 路径报错
-from setuptools import setup, find_packages
+from pathlib import Path
+
+from setuptools import find_namespace_packages, setup
+
+
+ROOT = Path(__file__).parent
+README_PATH = ROOT / 'README.md'
+
+
+def read_readme():
+    if README_PATH.exists():
+        return README_PATH.read_text(encoding='utf-8')
+    return 'UAV multi-modal OBB detection project.'
+
 
 setup(
-    name='uav_multimodal_det',
-    version='1.0.0',
-    description='A highly decoupled, industrial-grade framework for UAV Dual-Modal OBB Object Detection.',
-    author='Your Name',
-    packages=find_packages(), # 会自动找到 src 目录
+    name='uav-multimodal-obb-det',
+    version='0.1.0',
+    description='Configuration-driven UAV RGB-IR oriented object detection project.',
+    long_description=read_readme(),
+    long_description_content_type='text/markdown',
+    packages=find_namespace_packages(include=['src', 'src.*']),
+    include_package_data=True,
     python_requires='>=3.8',
+    install_requires=[
+        'torch>=1.13',
+        'torchvision>=0.14',
+        'numpy>=1.21',
+        'opencv-python>=4.5',
+        'omegaconf>=2.3',
+        'PyYAML>=6.0',
+        'tqdm>=4.64',
+        'shapely>=1.8',
+    ],
 )

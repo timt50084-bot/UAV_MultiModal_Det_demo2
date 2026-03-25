@@ -1,0 +1,28 @@
+dataset:
+  aug_cfg:
+    enable_cmcp: True
+    enable_mrre: True
+    enable_weather: True
+    enable_modality_dropout: True
+    cross_modal_misalignment:
+      enabled: True
+      prob: 0.2
+      apply_to: 'ir'
+      max_translate_ratio: 0.01
+      max_rotate_deg: 1.5
+      max_scale_delta: 0.02
+    sensor_degradation:
+      enabled: True
+      prob: 0.3
+      rgb:
+        overexposure_prob: 0.3
+        flare_prob: 0.15
+        haze_prob: 0.1
+        max_exposure_gain: 1.4
+      ir:
+        noise_prob: 0.3
+        noise_std: 0.03
+        drift_prob: 0.2
+        max_drift: 0.08
+        hotspot_prob: 0.15
+        stripe_prob: 0.05

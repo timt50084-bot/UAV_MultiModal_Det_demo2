@@ -6,7 +6,20 @@ from src.registry.loss_registry import ASSIGNERS
 
 @ASSIGNERS.register("DynamicTinyOBBAssigner")
 class DynamicTinyOBBAssigner(nn.Module):
-    def __init__(self, num_classes=5, topk=10, alpha=0.5, beta=6.0, temperature=2.0, eps=1e-9):
+    def __init__(
+        self,
+        num_classes=5,
+        topk=10,
+        alpha=0.5,
+        beta=6.0,
+        temperature=2.0,
+        eps=1e-9,
+        lambda_theta=1.5,
+        tiny_area_threshold=0.01,
+        tiny_topk_boost=0,
+        elongated_ratio_threshold=1e9,
+        use_angle_aware_assign=False,
+    ):
         super().__init__()
         self.num_classes = num_classes
         self.topk = topk
@@ -14,6 +27,11 @@ class DynamicTinyOBBAssigner(nn.Module):
         self.beta = beta
         self.temperature = temperature
         self.eps = eps
+        self.lambda_theta = lambda_theta
+        self.tiny_area_threshold = tiny_area_threshold
+        self.tiny_topk_boost = int(tiny_topk_boost)
+        self.elongated_ratio_threshold = elongated_ratio_threshold
+        self.use_angle_aware_assign = use_angle_aware_assign
 
     @torch.no_grad()
     def forward(self, pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes, mask_gt):
@@ -43,6 +61,39 @@ class DynamicTinyOBBAssigner(nn.Module):
 
         return target_labels, target_bboxes, target_scores, is_pos
 
+    def _get_gt_area(self, gt_bboxes):
+        gt_wh = torch.clamp(gt_bboxes[..., 2:4], min=self.eps)
+        return gt_wh[..., 0] * gt_wh[..., 1]
+
+    def _get_aspect_ratio(self, gt_bboxes):
+        gt_wh = torch.clamp(gt_bboxes[..., 2:4], min=self.eps)
+        ratio_wh = gt_wh[..., 0] / gt_wh[..., 1]
+        ratio_hw = gt_wh[..., 1] / gt_wh[..., 0]
+        return torch.maximum(ratio_wh, ratio_hw)
+
+    def _angle_distance(self, pred_theta, gt_theta):
+        half_pi = pred_theta.new_tensor(torch.pi * 0.5)
+        pi = pred_theta.new_tensor(torch.pi)
+        wrapped = torch.remainder(pred_theta - gt_theta + half_pi, pi) - half_pi
+        return wrapped.abs()
+
+    def _compute_tiny_severity(self, gt_bboxes):
+        gt_area = self._get_gt_area(gt_bboxes)
+        if self.tiny_area_threshold <= 0:
+            return torch.zeros_like(gt_area)
+        severity = (self.tiny_area_threshold - gt_area) / (self.tiny_area_threshold + self.eps)
+        return severity.clamp(min=0.0, max=1.0)
+
+    def _compute_candidate_budget(self, gt_bboxes, num_anchors):
+        batch_size, max_gts, _ = gt_bboxes.shape
+        if max_gts == 0:
+            return gt_bboxes.new_zeros((batch_size, 0), dtype=torch.long)
+
+        tiny_extra = torch.ceil(self._compute_tiny_severity(gt_bboxes) * float(max(self.tiny_topk_boost, 0))).long()
+        elongated_extra = (self._get_aspect_ratio(gt_bboxes) >= self.elongated_ratio_threshold).long()
+        budget = self.topk + tiny_extra + elongated_extra
+        return budget.clamp(min=1, max=max(int(num_anchors), 1))
+
     def get_box_metrics(self, pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes):
         batch_size, num_anchors, _ = pred_scores.shape
         max_gts = gt_bboxes.shape[1]
@@ -68,6 +119,25 @@ class DynamicTinyOBBAssigner(nn.Module):
             self.alpha * torch.log(bbox_scores + self.eps) +
             self.beta * torch.log(overlaps + self.eps)
         )
+
+        if self.use_angle_aware_assign:
+            pred_theta = pred_bboxes[:, :, None, 4]
+            gt_theta = gt_bboxes[:, None, :, 4]
+            delta_theta = self._angle_distance(pred_theta, gt_theta)
+            angle_factor = torch.exp(-self.lambda_theta * delta_theta)
+            align_metric = align_metric * angle_factor
+
+        tiny_scale = 1.0 + self._compute_tiny_severity(gt_bboxes)[:, None, :] * (
+            float(max(self.tiny_topk_boost, 0)) / max(float(self.topk), 1.0)
+        )
+        align_metric = align_metric * tiny_scale
+
+        aspect_ratio = self._get_aspect_ratio(gt_bboxes)[:, None, :]
+        elongated_strength = (
+            (aspect_ratio - self.elongated_ratio_threshold) / (self.elongated_ratio_threshold + self.eps)
+        ).clamp(min=0.0, max=1.0)
+        elongated_factor = 1.0 + 0.25 * elongated_strength
+        align_metric = align_metric * elongated_factor
 
         anchor_points_exp = anchor_points.view(1, num_anchors, 1, 2)
         center_dist = torch.norm(anchor_points_exp - gt_cxcy, dim=-1)
@@ -99,25 +169,30 @@ class DynamicTinyOBBAssigner(nn.Module):
         return is_in_box
 
     def apply_tiny_object_fallback(self, anchor_points, gt_bboxes, is_in_centers, mask_gt):
-        gt_wh = gt_bboxes[:, :, 2:4]
-        gt_area = gt_wh[..., 0] * gt_wh[..., 1]
+        gt_area = self._get_gt_area(gt_bboxes)
+        aspect_ratio = self._get_aspect_ratio(gt_bboxes)
 
         candidates_per_gt = is_in_centers.sum(dim=1)
-        tiny_missed_mask = (mask_gt.squeeze(-1) > 0) & (gt_area < 0.01) & (candidates_per_gt == 0)
+        protected_missed_mask = (
+            (mask_gt.squeeze(-1) > 0)
+            & (candidates_per_gt == 0)
+            & ((gt_area < self.tiny_area_threshold) | (aspect_ratio >= self.elongated_ratio_threshold))
+        )
 
-        if tiny_missed_mask.any():
-            fallback_k = torch.where(gt_area < 0.002, 5, 3)
+        if protected_missed_mask.any():
+            candidate_budget = self._compute_candidate_budget(gt_bboxes, anchor_points.shape[0])
+            fallback_k = (candidate_budget - self.topk + 3).clamp(min=3)
             gt_cxcy = gt_bboxes[..., :2]
             dist = torch.cdist(gt_cxcy, anchor_points.unsqueeze(0).repeat(gt_cxcy.size(0), 1, 1))
 
-            max_fallback = 5
+            max_fallback = min(anchor_points.shape[0], 3 + max(self.tiny_topk_boost, 0) + 1)
             closest_idx = dist.topk(max_fallback, largest=False).indices
 
             device = gt_bboxes.device
             seq = torch.arange(max_fallback, device=device).view(1, 1, max_fallback)
             keep_mask = seq < fallback_k.unsqueeze(-1)
 
-            valid_fallback = tiny_missed_mask.unsqueeze(-1) & keep_mask
+            valid_fallback = protected_missed_mask.unsqueeze(-1) & keep_mask
             batch_idx, max_gts_idx, k_idx = torch.where(valid_fallback)
 
             actual_anchor_idx = closest_idx[batch_idx, max_gts_idx, k_idx]
@@ -133,11 +208,13 @@ class DynamicTinyOBBAssigner(nn.Module):
 
         align_metric *= mask_gt.view(batch_size, max_gts, 1)
 
-        topk_metrics, topk_idxs = torch.topk(align_metric, self.topk, dim=-1, largest=True)
+        candidate_budget = self._compute_candidate_budget(gt_bboxes, num_anchors).to(device)
+        max_topk = max(int(candidate_budget.max().item()) if candidate_budget.numel() > 0 else self.topk, 1)
+        topk_metrics, topk_idxs = torch.topk(align_metric, max_topk, dim=-1, largest=True)
         topk_overlaps = torch.gather(overlaps, 2, topk_idxs)
-        dynamic_k = torch.clamp(torch.round(topk_overlaps.sum(dim=-1)), min=1.0, max=float(self.topk)).int()
+        dynamic_k = torch.clamp(torch.round(topk_overlaps.sum(dim=-1)), min=1.0, max=candidate_budget.float()).int()
 
-        seq = torch.arange(self.topk, device=device).view(1, 1, -1)
+        seq = torch.arange(max_topk, device=device).view(1, 1, -1)
         k_mask = seq < dynamic_k.unsqueeze(-1)
 
         is_pos = torch.zeros_like(align_metric, dtype=torch.bool)

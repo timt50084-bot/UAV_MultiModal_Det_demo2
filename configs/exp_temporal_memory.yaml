@@ -1,0 +1,13 @@
+model:
+  type: 'YOLODualModalOBB'
+  num_classes: 5
+  channels: [64, 128, 256, 512]
+  fusion_att_type: 'SimpleConcatFusion'
+  norm_type: 'GN'
+  use_contrastive: False
+  temporal:
+    enabled: True
+    mode: 'memory'
+    memory_len: 3
+    aggregator: 'weighted_avg'
+    gate_hidden_ratio: 0.25

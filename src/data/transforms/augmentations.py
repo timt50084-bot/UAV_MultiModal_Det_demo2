@@ -90,14 +90,208 @@ class PC_MWA:
         return self.apply_weather_config(img_rgb, img_ir, config)
 
 
+class CrossModalMisalignment:
+    """Simulate slight RGB/IR registration error without changing labels."""
+
+    def __init__(
+        self,
+        enabled=False,
+        prob=0.0,
+        apply_to='ir',
+        max_translate_ratio=0.01,
+        max_rotate_deg=1.5,
+        max_scale_delta=0.02,
+        border_mode='reflect',
+    ):
+        self.enabled = enabled
+        self.prob = prob
+        self.apply_to = apply_to
+        self.max_translate_ratio = max_translate_ratio
+        self.max_rotate_deg = max_rotate_deg
+        self.max_scale_delta = max_scale_delta
+        self.border_mode = border_mode
+
+    def sample_config(self, image_shape):
+        if not self.enabled or random.random() > self.prob:
+            return None
+
+        height, width = image_shape[:2]
+        target_modalities = ['rgb', 'ir'] if self.apply_to == 'random' else [self.apply_to]
+        target_modality = random.choice(target_modalities)
+        return {
+            'target_modality': target_modality,
+            'translate_x': random.uniform(-self.max_translate_ratio, self.max_translate_ratio) * width,
+            'translate_y': random.uniform(-self.max_translate_ratio, self.max_translate_ratio) * height,
+            'rotate_deg': random.uniform(-self.max_rotate_deg, self.max_rotate_deg),
+            'scale': 1.0 + random.uniform(-self.max_scale_delta, self.max_scale_delta),
+        }
+
+    def _apply_affine(self, image, config):
+        height, width = image.shape[:2]
+        matrix = cv2.getRotationMatrix2D((width * 0.5, height * 0.5), config['rotate_deg'], config['scale'])
+        matrix[0, 2] += config['translate_x']
+        matrix[1, 2] += config['translate_y']
+        border_mode = cv2.BORDER_REFLECT_101 if self.border_mode == 'reflect' else cv2.BORDER_CONSTANT
+        return cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR, borderMode=border_mode)
+
+    def apply_config(self, img_rgb, img_ir, config):
+        if config is None:
+            return img_rgb, img_ir
+        if config['target_modality'] == 'rgb':
+            return self._apply_affine(img_rgb, config), img_ir
+        return img_rgb, self._apply_affine(img_ir, config)
+
+    def __call__(self, img_rgb, img_ir):
+        config = self.sample_config(img_rgb.shape)
+        return self.apply_config(img_rgb, img_ir, config)
+
+
+class SensorDegradationAug:
+    """Lightweight RGB/IR sensor degradation simulation."""
+
+    def __init__(self, enabled=False, prob=0.0, rgb=None, ir=None):
+        self.enabled = enabled
+        self.prob = prob
+        self.rgb_cfg = {
+            'overexposure_prob': 0.3,
+            'flare_prob': 0.15,
+            'haze_prob': 0.1,
+            'max_exposure_gain': 1.4,
+        }
+        self.ir_cfg = {
+            'noise_prob': 0.3,
+            'noise_std': 0.03,
+            'drift_prob': 0.2,
+            'max_drift': 0.08,
+            'hotspot_prob': 0.15,
+            'stripe_prob': 0.0,
+        }
+        if rgb is not None:
+            self.rgb_cfg.update(rgb)
+        if ir is not None:
+            self.ir_cfg.update(ir)
+
+    def _clip_uint8(self, image):
+        return np.clip(image, 0, 255).astype(np.uint8)
+
+    def _radial_mask(self, height, width, center_xy, radius_ratio):
+        center_x = center_xy[0] * width
+        center_y = center_xy[1] * height
+        radius = max(1.0, radius_ratio * min(height, width))
+        yy, xx = np.mgrid[0:height, 0:width]
+        dist = np.sqrt((xx - center_x) ** 2 + (yy - center_y) ** 2)
+        mask = np.exp(-(dist ** 2) / (2.0 * radius ** 2))
+        return mask[..., None].astype(np.float32)
+
+    def sample_config(self):
+        if not self.enabled or random.random() > self.prob:
+            return None
+
+        config = {
+            'seed': random.randint(0, 10_000_000),
+            'rgb': {
+                'use_overexposure': random.random() < self.rgb_cfg['overexposure_prob'],
+                'use_flare': random.random() < self.rgb_cfg['flare_prob'],
+                'use_haze': random.random() < self.rgb_cfg['haze_prob'],
+                'exposure_gain': random.uniform(1.05, self.rgb_cfg['max_exposure_gain']),
+                'flare_strength': random.uniform(0.08, 0.20),
+                'flare_center': (random.uniform(0.2, 0.8), random.uniform(0.2, 0.8)),
+                'flare_radius_ratio': random.uniform(0.10, 0.25),
+                'exposure_center': (random.uniform(0.2, 0.8), random.uniform(0.2, 0.8)),
+                'exposure_radius_ratio': random.uniform(0.15, 0.35),
+                'haze_strength': random.uniform(0.05, 0.18),
+            },
+            'ir': {
+                'noise_prob': self.ir_cfg['noise_prob'],
+                'noise_std': self.ir_cfg['noise_std'],
+                'use_drift': random.random() < self.ir_cfg['drift_prob'],
+                'drift_value': random.uniform(-self.ir_cfg['max_drift'], self.ir_cfg['max_drift']),
+                'hotspot_prob': self.ir_cfg['hotspot_prob'],
+                'stripe_prob': self.ir_cfg.get('stripe_prob', 0.0),
+                'hotspot_strength': random.uniform(18.0, 42.0),
+                'hotspot_radius_ratio': random.uniform(0.04, 0.10),
+            },
+        }
+        return config
+
+    def _apply_rgb_degradation(self, image, config):
+        out = image.astype(np.float32)
+        height, width = out.shape[:2]
+
+        if config['use_haze']:
+            haze_strength = config['haze_strength']
+            out = out * (1.0 - haze_strength) + 255.0 * haze_strength
+            out = (out - 127.5) * (1.0 - 0.25 * haze_strength) + 127.5
+
+        if config['use_overexposure']:
+            mask = self._radial_mask(height, width, config['exposure_center'], config['exposure_radius_ratio'])
+            out = out * (1.0 + (config['exposure_gain'] - 1.0) * mask)
+
+        if config['use_flare']:
+            flare_mask = self._radial_mask(height, width, config['flare_center'], config['flare_radius_ratio'])
+            out = out + 255.0 * config['flare_strength'] * flare_mask
+
+        return self._clip_uint8(out)
+
+    def _apply_ir_degradation(self, image, config, frame_seed_offset=0):
+        out = image.astype(np.float32)
+        height, width = out.shape[:2]
+        base_seed = int(config['seed']) + int(frame_seed_offset) * 9973
+        rng = np.random.default_rng(base_seed)
+
+        if config['use_drift']:
+            drift_value = config['drift_value'] * 255.0
+            low_freq = rng.normal(0.0, 1.0, size=(max(2, height // 32), max(2, width // 32))).astype(np.float32)
+            low_freq = cv2.resize(low_freq, (width, height), interpolation=cv2.INTER_CUBIC)
+            low_freq = cv2.GaussianBlur(low_freq, (0, 0), sigmaX=3.0, sigmaY=3.0)
+            low_freq = low_freq[..., None]
+            out = out + drift_value + 0.15 * drift_value * low_freq
+
+        if rng.random() < config['noise_prob']:
+            noise = rng.normal(0.0, config['noise_std'] * 255.0, size=out.shape).astype(np.float32)
+            out = out + noise
+
+        if rng.random() < config['hotspot_prob']:
+            hotspot_center = (rng.uniform(0.15, 0.85), rng.uniform(0.15, 0.85))
+            hotspot_mask = self._radial_mask(height, width, hotspot_center, config['hotspot_radius_ratio'])
+            out = out + config['hotspot_strength'] * hotspot_mask
+
+        if rng.random() < config.get('stripe_prob', 0.0):
+            stripes = rng.normal(0.0, 6.0, size=(1, width, 1)).astype(np.float32)
+            out = out + stripes
+
+        return self._clip_uint8(out)
+
+    def apply_config(self, img_rgb, img_ir, config, frame_seed_offset=0):
+        if config is None:
+            return img_rgb, img_ir
+        img_rgb = self._apply_rgb_degradation(img_rgb, config['rgb'])
+        img_ir = self._apply_ir_degradation(img_ir, config['ir'], frame_seed_offset=frame_seed_offset)
+        return img_rgb, img_ir
+
+    def __call__(self, img_rgb, img_ir):
+        config = self.sample_config()
+        return self.apply_config(img_rgb, img_ir, config, frame_seed_offset=0)
+
+
 class MultiModalAugmentationPipeline:
     """Augment current RGB-IR frame, with optional temporal consistency for previous frame."""
 
-    def __init__(self, enable_cmcp=True, enable_mrre=True, enable_weather=True, enable_modality_dropout=True):
+    def __init__(
+        self,
+        enable_cmcp=True,
+        enable_mrre=True,
+        enable_weather=True,
+        enable_modality_dropout=True,
+        cross_modal_misalignment=None,
+        sensor_degradation=None,
+    ):
         self.enable_cmcp = enable_cmcp
         self.enable_mrre = enable_mrre
         self.enable_modality_dropout = enable_modality_dropout
         self.weather_sim = PC_MWA(base_p=0.2, max_p=0.6) if enable_weather else None
+        self.cross_modal_misalignment = CrossModalMisalignment(**cross_modal_misalignment) if cross_modal_misalignment else None
+        self.sensor_degradation = SensorDegradationAug(**sensor_degradation) if sensor_degradation else None
 
     def check_iou_conflict(self, px, py, pw, ph, existing_labels, width, height, iou_thresh=0.1):
         box1 = [px - pw / 2, py - ph / 2, px + pw / 2, py + ph / 2]
@@ -185,8 +379,16 @@ class MultiModalAugmentationPipeline:
         if self.enable_mrre:
             img_rgb, img_ir = self.apply_mrre(labels, img_rgb, img_ir)
 
+        misalignment_config = self.cross_modal_misalignment.sample_config(img_rgb.shape) if self.cross_modal_misalignment else None
+        if self.cross_modal_misalignment:
+            img_rgb, img_ir = self.cross_modal_misalignment.apply_config(img_rgb, img_ir, misalignment_config)
+
         weather_config = self.weather_sim.sample_weather_config(progress) if self.weather_sim else None
         img_rgb, img_ir = self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config) if self.weather_sim else (img_rgb, img_ir)
+
+        sensor_config = self.sensor_degradation.sample_config() if self.sensor_degradation else None
+        if self.sensor_degradation:
+            img_rgb, img_ir = self.sensor_degradation.apply_config(img_rgb, img_ir, sensor_config, frame_seed_offset=0)
 
         modality_dropout = self.sample_modality_dropout_config() if self.enable_modality_dropout else None
         img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)
@@ -199,10 +401,20 @@ class MultiModalAugmentationPipeline:
         if self.enable_mrre:
             img_rgb, img_ir = self.apply_mrre(labels, img_rgb, img_ir)
 
+        misalignment_config = self.cross_modal_misalignment.sample_config(img_rgb.shape) if self.cross_modal_misalignment else None
+        if self.cross_modal_misalignment:
+            img_rgb, img_ir = self.cross_modal_misalignment.apply_config(img_rgb, img_ir, misalignment_config)
+            prev_rgb, prev_ir = self.cross_modal_misalignment.apply_config(prev_rgb, prev_ir, misalignment_config)
+
         weather_config = self.weather_sim.sample_weather_config(progress) if self.weather_sim else None
         if self.weather_sim:
             img_rgb, img_ir = self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config)
             prev_rgb, prev_ir = self.weather_sim.apply_weather_config(prev_rgb, prev_ir, weather_config)
+
+        sensor_config = self.sensor_degradation.sample_config() if self.sensor_degradation else None
+        if self.sensor_degradation:
+            img_rgb, img_ir = self.sensor_degradation.apply_config(img_rgb, img_ir, sensor_config, frame_seed_offset=0)
+            prev_rgb, prev_ir = self.sensor_degradation.apply_config(prev_rgb, prev_ir, sensor_config, frame_seed_offset=1)
 
         modality_dropout = self.sample_modality_dropout_config() if self.enable_modality_dropout else None
         img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)

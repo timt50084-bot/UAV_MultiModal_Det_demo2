@@ -1,0 +1,11 @@
+model:
+  type: 'YOLODualModalOBB'
+  num_classes: 5
+  channels: [64, 128, 256, 512]
+  norm_type: 'GN'
+  use_contrastive: False
+
+  fusion:
+    type: 'ReliabilityAwareFusion'
+    hidden_ratio: 0.25
+    p2_boost_init: 0.1

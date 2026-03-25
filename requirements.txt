@@ -1,19 +1,15 @@
-# 依赖清单 (包含 omegaconf 等)
-# Core Deep Learning
-torch>=1.13.0
-torchvision>=0.14.0
-
-# Data Processing & Math
-numpy>=1.21.0
-opencv-python>=4.5.0
-Shapely>=2.0.0
-
-# Configuration & Logging
-omegaconf>=2.3.0
+# Core runtime dependencies
+torch>=1.13
+torchvision>=0.14
+numpy>=1.21
+opencv-python>=4.5
+omegaconf>=2.3
 PyYAML>=6.0
-tqdm>=4.64.0
+tqdm>=4.64
+shapely>=1.8
 
-# Deployment (Optional but recommended for export.py)
-onnx>=1.13.0
-onnxsim>=0.4.30
-onnxruntime>=1.14.0
+# Optional: model export
+# Install these only if you need tools/export.py
+# onnx>=1.13
+# onnxsim>=0.4.30
+# onnxruntime>=1.14

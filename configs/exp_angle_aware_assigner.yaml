@@ -1,0 +1,13 @@
+assigner:
+  type: 'DynamicTinyOBBAssigner'
+  num_classes: 5
+  topk: 10
+  alpha: 0.5
+  beta: 6.0
+  temperature: 2.0
+  eps: 1e-9
+  lambda_theta: 1.5
+  tiny_area_threshold: 0.01
+  tiny_topk_boost: 2
+  elongated_ratio_threshold: 3.0
+  use_angle_aware_assign: True
