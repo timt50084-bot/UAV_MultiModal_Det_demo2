@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from setuptools import find_namespace_packages, setup
+from setuptools import find_packages, setup
 
 
 ROOT = Path(__file__).parent
@@ -13,13 +13,19 @@ def read_readme():
     return 'UAV multi-modal OBB detection project.'
 
 
+def discover_packages():
+    packages = ['src']
+    packages.extend(find_packages(where='.', include=['src.*']))
+    return packages
+
+
 setup(
     name='uav-multimodal-obb-det',
     version='0.1.0',
     description='Configuration-driven UAV RGB-IR oriented object detection project.',
     long_description=read_readme(),
     long_description_content_type='text/markdown',
-    packages=find_namespace_packages(include=['src', 'src.*']),
+    packages=discover_packages(),
     include_package_data=True,
     python_requires='>=3.8',
     install_requires=[

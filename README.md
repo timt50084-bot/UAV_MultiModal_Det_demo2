@@ -1,13 +1,12 @@
 # UAV 多模态旋转框检测项目
 
-一个面向 UAV 场景的 RGB + IR 双模态 OBB（Oriented Bounding Box，旋转框）检测工程。项目采用配置驱动方式组织训练、验证、推理、导出与实验扩展，当前代码已包含可插拔融合模块、面向小目标的分配器、双帧与短时序模块、真实多模态退化增强以及任务导向评测指标。
+一个面向 UAV 场景的 RGB + IR 双模态 OBB（Oriented Bounding Box，旋转框）检测工程。项目采用配置驱动方式组织训练、验证、推理、导出与实验扩展，当前代码已包含可插拔融合模块、面向小目标的分配器、双帧/短时序模块、真实多模态退化增强以及任务导向评测指标。
 
 ## 项目简介
 
 本项目聚焦无人机场景下的小目标、多模态和旋转框检测问题，目标是提供一套可训练、可验证、可推理、可导出的工程化基线，并支持逐步扩展新的 fusion、temporal、assigner、augmentation 与 metrics 模块。
 
-当前代码对应的核心能力包括：
-
+当前代码状态对应的核心能力包括：
 - RGB + IR 双流 backbone
 - 可插拔融合模块
 - OBB decoupled detection head
@@ -34,7 +33,7 @@
 当前仓库的主要目录如下：
 
 ```text
-UAV_MultiModal_Det_demo1/
+UAV_MultiModal_Det_demo2/
 ├─ configs/
 │  ├─ default.yaml
 │  ├─ exp_angle_aware_assigner.yaml
@@ -76,7 +75,7 @@ UAV_MultiModal_Det_demo1/
 
 ```bash
 git clone <your-repo-url>
-cd UAV_MultiModal_Det_demo1
+cd UAV_MultiModal_Det_demo2
 ```
 
 ### 2. 创建虚拟环境
@@ -88,7 +87,7 @@ conda create -n uav-mm-obb python=3.9
 conda activate uav-mm-obb
 ```
 
-或使用 venv：
+或使用 `venv`：
 
 ```bash
 python -m venv .venv
@@ -199,7 +198,6 @@ python tools/val.py --config configs/exp_task_metrics.yaml --weights outputs/wei
 ```
 
 当前评测结果字典兼容以下字段：
-
 - `mAP_50`
 - `mAP_S`
 - `Recall_S`
@@ -209,7 +207,6 @@ python tools/val.py --config configs/exp_task_metrics.yaml --weights outputs/wei
 - `TemporalStability`（可计算时）
 
 说明：
-
 - `Recall_S`、`Precision_S`、`TemporalStability` 越大越好。
 - `CrossModalRobustness_RGBDrop`、`CrossModalRobustness_IRDrop` 表示相对基线的性能下降幅度，越小越好。
 - 若没有可用序列信息，`TemporalStability` 会自动跳过。
@@ -337,4 +334,4 @@ python -m unittest tests.test_task_specific_metrics
 ## 说明
 
 - 本 README 以当前仓库代码状态为准整理。
-- 若后续继续引入新模块，请优先同步更新 `configs/`、`requirements.txt` 和本文件中的命令示例。
+- 若后续继续引入新模块，请优先同步更新 `configs/`、`requirements.txt` 和本文中的命令示例。
