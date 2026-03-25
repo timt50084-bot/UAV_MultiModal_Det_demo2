@@ -1,0 +1,81 @@
+# 全局基础配置 (Base Config)
+# configs/default.yaml
+# 🔥 多模态极小目标 OBB 工业级全局总控配置 (The V8 Master Config)
+
+# ==========================================
+# 1. 基础运行与 IO 参数
+# ==========================================
+batch_size: 2             # 单卡 Batch Size (4090/3090 建议 2~4)
+num_workers: 8            # 数据加载并发线程数
+use_log_sampler: True     # 是否开启 Log-Scale 小目标加权采样器 (防长尾过拟合)
+
+# ==========================================
+# 2. 数据流管道配置 (Dataset & Augmentations)
+# ==========================================
+dataset:
+  type: 'DroneDualDataset'
+  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+  split: 'train'          # 构建 Dataloader 时可通过代码覆盖为 'val'
+  imgsz: 1024
+  class_names: ['car', 'truck', 'bus', 'van', 'freight_car']
+
+  # 高阶多模态数据增强管道配置
+  aug_cfg:
+    enable_cmcp: True             # 开启 Copy-Paste (防重叠冲突版)
+    enable_mrre: True             # 开启多分辨率区域擦除
+    enable_weather: True          # 开启 Curriculum Learning 难度感知恶劣天气模拟
+    enable_modality_dropout: True # 开启模态 Dropout (强制单模态生存)
+
+# ==========================================
+# 3. 核心模型架构 (Model Architecture)
+# ==========================================
+model:
+  type: 'YOLODualModalOBB'
+  num_classes: 5
+  channels: [64, 128, 256, 512]  # 特征金字塔尺度
+  fusion_att_type: 'JCA'         # 融合模块切片: 可选 JCA, CBAM, SimpleConcatFusion 等 (做消融实验直接改这行)
+  norm_type: 'GN'                # 归一化策略: 小 Batch 救星 GN, 大 Batch 可换 BN
+  use_contrastive: False         # 跨模态对比对齐损失开关
+
+# ==========================================
+# 4. 目标分配与误差引擎 (Assigner & Loss)
+# ==========================================
+assigner:
+  type: 'DynamicTinyOBBAssigner'
+  num_classes: 5
+  topk: 10               # 初始筛选的最大 Anchor 数量
+  alpha: 0.5             # 分类得分的对齐权重
+  beta: 6.0              # IoU 的对齐权重
+  temperature: 2.0       # 软标签温度平滑系数 (防止早期收敛崩溃)
+  eps: 1e-9              # 数值稳定项
+
+loss:
+  type: 'UAVDualModalLoss'
+  num_classes: 5
+  alpha: 0.25            # Focal Loss 正负样本平衡系数
+  gamma: 2.0             # Focal Loss 难易样本挖掘系数
+  use_scale_weight: True # 开启极小目标自适应重加权惩罚
+
+# ==========================================
+# 5. 训练生命周期控制器 (Train Lifecycle)
+# ==========================================
+train:
+  epochs: 100            # 总训练轮数
+  lr: 0.001              # 初始学习率 (AdamW)
+  weight_decay: 0.0005   # 权重衰减率
+  lrf: 0.01              # 余弦退火最终学习率倍率
+  accumulate: 8          # 梯度累加步数 (2 * 8 = 16 模拟标准 Batch)
+  use_amp: True          # 开启 FP16 混合精度加速
+  grad_clip: 10.0        # 梯度裁剪阈值 (防炸模型防线)
+  patience: 50           # 早停容忍 Epoch 数
+  save_dir: 'outputs/weights' # 权重落盘路径
+
+# ==========================================
+# 6. 验证与推理引擎后处理 (Val & Infer NMS)
+# ==========================================
+val:
+  nms:
+    conf_thres: 0.001    # 验证期置信度截断 (设为 0.001 榨干 Recall 刷 mAP，推理时建议改 0.25)
+    iou_thres: 0.45      # 矩阵 NMS 交并比抑制阈值
+    max_det: 300         # 单图最大保留目标数
+    max_wh: 4096.0       # 类别隔离偏移量 (防止 4K 图像坐标越界碰撞)

@@ -1,0 +1,14 @@
+# Reciprocal Difference Modulation fusion + two-frame temporal refinement
+model:
+  type: 'YOLODualModalOBB'
+  num_classes: 5
+  channels: [64, 128, 256, 512]
+  fusion_att_type: 'RDMFusion'
+  norm_type: 'GN'
+  use_contrastive: True
+  temporal_enabled: True
+  temporal_stride: 1
+
+loss:
+  temporal_weight: 0.1
+  temporal_low_motion_bias: 0.75

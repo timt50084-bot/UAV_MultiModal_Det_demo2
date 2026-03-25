@@ -1,0 +1,15 @@
+# CrossAttn 消融实验配置
+# configs/model/yolov8_dual_crossattn.yaml
+# 论文完整版 (Ours)：开启双向跨模态 Transformer 与 对比对齐损失
+
+model:
+  type: 'YOLODualModalOBB'
+  num_classes: 5
+  channels: [64, 128, 256, 512]
+
+  # 【火力全开】使用你们创新的双流融合模块
+  fusion_att_type: 'DualStreamFusion'
+  norm_type: 'GN'
+
+  # 开启模态语义对齐对比损失
+  use_contrastive: True

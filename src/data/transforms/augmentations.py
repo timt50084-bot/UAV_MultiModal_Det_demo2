@@ -1,0 +1,211 @@
+import random
+
+import cv2
+import numpy as np
+
+
+class PC_MWA:
+    """Physically consistent multi-modal weather augmentation."""
+
+    def __init__(self, base_p=0.2, max_p=0.6):
+        self.base_p = base_p
+        self.max_p = max_p
+        self.weather_types = ['low_light', 'fog', 'rain']
+        self.weather_probs = [0.4, 0.4, 0.2]
+
+    def adjust_gamma(self, image, gamma=1.0):
+        inv_gamma = 1.0 / gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        return cv2.LUT(image, table)
+
+    def apply_thermal_attenuation(self, img_ir, alpha=0.92, noise_std=3.0, seed=0):
+        rng = np.random.default_rng(seed)
+        img_ir_attenuated = cv2.convertScaleAbs(img_ir, alpha=alpha, beta=0)
+        noise = rng.normal(0, noise_std, img_ir.shape).astype(np.float32)
+        return np.clip(img_ir_attenuated.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+    def add_rain_streaks(self, image, drops_num=200, seed=0):
+        rng = random.Random(seed)
+        rain_layer = np.zeros_like(image)
+        for _ in range(drops_num):
+            x = rng.randint(0, image.shape[1] - 1)
+            y = rng.randint(0, max(0, image.shape[0] - 20))
+            dx = rng.randint(-3, 3)
+            cv2.line(rain_layer, (x, y), (x + dx, y + 20), (200, 200, 200), 1)
+        return cv2.addWeighted(image, 1.0, cv2.blur(rain_layer, (3, 3)), 0.7, 0)
+
+    def sample_weather_config(self, progress=1.0):
+        current_p = self.base_p + (self.max_p - self.base_p) * progress
+        if random.random() > current_p:
+            return None
+
+        is_extreme = random.random() < (0.05 + 0.15 * progress)
+        weather = random.choices(self.weather_types, weights=self.weather_probs, k=1)[0]
+        config = {
+            'weather': weather,
+            'is_extreme': is_extreme,
+            'seed': random.randint(0, 10_000_000),
+        }
+
+        if weather == 'low_light':
+            config['gamma'] = random.uniform(4.5, 6.0) if is_extreme else random.uniform(2.5, 3.5)
+            config['ir_alpha'] = random.uniform(0.75, 0.85) if is_extreme else random.uniform(0.90, 0.98)
+        elif weather == 'fog':
+            config['fog_int'] = 0.9 if is_extreme else random.uniform(0.4, 0.6)
+            config['blur_ksize'] = 7 if is_extreme else 3
+            config['ir_alpha'] = random.uniform(0.80, 0.95) if is_extreme else random.uniform(0.90, 0.95)
+        elif weather == 'rain':
+            config['drops'] = 1000 if is_extreme else 300
+            config['extreme_blur'] = is_extreme
+            config['ir_alpha'] = random.uniform(0.80, 0.95) if is_extreme else random.uniform(0.90, 0.95)
+
+        return config
+
+    def apply_weather_config(self, img_rgb, img_ir, config):
+        if config is None:
+            return img_rgb, img_ir
+
+        weather = config['weather']
+        seed = config['seed']
+
+        if weather == 'low_light':
+            img_rgb = self.adjust_gamma(img_rgb, config['gamma'])
+            img_ir = self.apply_thermal_attenuation(img_ir, alpha=config['ir_alpha'], seed=seed)
+        elif weather == 'fog':
+            fog_int = config['fog_int']
+            img_rgb = cv2.addWeighted(img_rgb, 1 - fog_int, np.ones_like(img_rgb) * 255, fog_int, 0)
+            blur_ksize = config['blur_ksize']
+            img_ir = cv2.GaussianBlur(img_ir, (blur_ksize, blur_ksize), 0)
+            img_ir = self.apply_thermal_attenuation(img_ir, alpha=config['ir_alpha'], seed=seed)
+        elif weather == 'rain':
+            img_rgb = self.add_rain_streaks(img_rgb, config['drops'], seed=seed)
+            if config['extreme_blur']:
+                img_rgb = cv2.blur(img_rgb, (5, 5))
+            img_ir = self.apply_thermal_attenuation(img_ir, alpha=config['ir_alpha'], seed=seed)
+
+        return img_rgb, img_ir
+
+    def __call__(self, img_rgb, img_ir, progress=1.0):
+        config = self.sample_weather_config(progress)
+        return self.apply_weather_config(img_rgb, img_ir, config)
+
+
+class MultiModalAugmentationPipeline:
+    """Augment current RGB-IR frame, with optional temporal consistency for previous frame."""
+
+    def __init__(self, enable_cmcp=True, enable_mrre=True, enable_weather=True, enable_modality_dropout=True):
+        self.enable_cmcp = enable_cmcp
+        self.enable_mrre = enable_mrre
+        self.enable_modality_dropout = enable_modality_dropout
+        self.weather_sim = PC_MWA(base_p=0.2, max_p=0.6) if enable_weather else None
+
+    def check_iou_conflict(self, px, py, pw, ph, existing_labels, width, height, iou_thresh=0.1):
+        box1 = [px - pw / 2, py - ph / 2, px + pw / 2, py + ph / 2]
+        for lbl in existing_labels:
+            _, cx, cy, w, h, _ = lbl
+            box2 = [cx * width - w * width / 2, cy * height - h * height / 2,
+                    cx * width + w * width / 2, cy * height + h * height / 2]
+            ix1, iy1 = max(box1[0], box2[0]), max(box1[1], box2[1])
+            ix2, iy2 = min(box1[2], box2[2]), min(box1[3], box2[3])
+            if ix1 < ix2 and iy1 < iy2:
+                inter_area = (ix2 - ix1) * (iy2 - iy1)
+                iou = inter_area / float(pw * ph + (w * width) * (h * height) - inter_area + 1e-6)
+                if iou > iou_thresh:
+                    return True
+        return False
+
+    def apply_cmcp(self, labels, img_rgb, img_ir):
+        if len(labels) == 0:
+            return labels, img_rgb, img_ir
+        height, width = img_rgb.shape[:2]
+        new_labels = list(labels)
+
+        for lbl in labels:
+            cls_id, cx, cy, w, h, theta = lbl
+            if w < 0.05 and h < 0.05:
+                abs_w, abs_h = int(w * width), int(h * height)
+                x1, y1 = max(0, int(cx * width) - abs_w // 2), max(0, int(cy * height) - abs_h // 2)
+                x2, y2 = min(width, x1 + abs_w), min(height, y1 + abs_h)
+
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                patch_rgb, patch_ir = img_rgb[y1:y2, x1:x2].copy(), img_ir[y1:y2, x1:x2].copy()
+
+                for _ in range(10):
+                    paste_x, paste_y = random.randint(0, width - abs_w), random.randint(0, height - abs_h)
+                    paste_cx, paste_cy = paste_x + abs_w / 2, paste_y + abs_h / 2
+                    if not self.check_iou_conflict(paste_cx, paste_cy, abs_w, abs_h, new_labels, width, height):
+                        img_rgb[paste_y:paste_y + patch_rgb.shape[0], paste_x:paste_x + patch_rgb.shape[1]] = patch_rgb
+                        img_ir[paste_y:paste_y + patch_ir.shape[0], paste_x:paste_x + patch_ir.shape[1]] = patch_ir
+                        new_labels.append([cls_id, paste_cx / width, paste_cy / height, w, h, theta])
+                        break
+
+        return np.array(new_labels, dtype=np.float32), img_rgb, img_ir
+
+    def apply_mrre(self, labels, img_rgb, img_ir):
+        if len(labels) == 0:
+            return img_rgb, img_ir
+        height, width = img_rgb.shape[:2]
+        for lbl in labels:
+            if random.random() > 0.5:
+                continue
+            _, cx, cy, w, h, _ = lbl
+            abs_w, abs_h = int(w * width), int(h * height)
+            bg_x, bg_y = random.randint(0, width - abs_w // 2), random.randint(0, height - abs_h // 2)
+            bg_patch_rgb = img_rgb[bg_y:bg_y + abs_h // 2, bg_x:bg_x + abs_w // 2].copy()
+            bg_patch_ir = img_ir[bg_y:bg_y + abs_h // 2, bg_x:bg_x + abs_w // 2].copy()
+            tgt_x, tgt_y = int(cx * width) - abs_w // 4, int(cy * height) - abs_h // 4
+            if 0 <= tgt_x < width - abs_w // 2 and 0 <= tgt_y < height - abs_h // 2:
+                img_rgb[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_rgb
+                img_ir[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_ir
+        return img_rgb, img_ir
+
+    def sample_modality_dropout_config(self):
+        p = random.random()
+        if p < 0.05:
+            return {'mode': 'drop_rgb'}
+        if p < 0.10:
+            return {'mode': 'noise_ir', 'seed': random.randint(0, 10_000_000)}
+        return None
+
+    def apply_modality_dropout_config(self, img_rgb, img_ir, config):
+        if config is None:
+            return img_rgb, img_ir
+        if config['mode'] == 'drop_rgb':
+            img_rgb = np.zeros_like(img_rgb)
+        elif config['mode'] == 'noise_ir':
+            rng = np.random.default_rng(config['seed'])
+            img_ir = rng.normal(128, 50, img_ir.shape).clip(0, 255).astype(np.uint8)
+        return img_rgb, img_ir
+
+    def __call__(self, img_rgb, img_ir, labels, epoch=0, max_epoch=100):
+        progress = min(1.0, max(0.0, epoch / max_epoch))
+        if self.enable_cmcp and random.random() < 0.5:
+            labels, img_rgb, img_ir = self.apply_cmcp(labels, img_rgb, img_ir)
+        if self.enable_mrre:
+            img_rgb, img_ir = self.apply_mrre(labels, img_rgb, img_ir)
+
+        weather_config = self.weather_sim.sample_weather_config(progress) if self.weather_sim else None
+        img_rgb, img_ir = self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config) if self.weather_sim else (img_rgb, img_ir)
+
+        modality_dropout = self.sample_modality_dropout_config() if self.enable_modality_dropout else None
+        img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)
+        return img_rgb, img_ir, labels
+
+    def apply_temporal_pair(self, img_rgb, img_ir, prev_rgb, prev_ir, labels, epoch=0, max_epoch=100):
+        progress = min(1.0, max(0.0, epoch / max_epoch))
+        if self.enable_cmcp and random.random() < 0.5:
+            labels, img_rgb, img_ir = self.apply_cmcp(labels, img_rgb, img_ir)
+        if self.enable_mrre:
+            img_rgb, img_ir = self.apply_mrre(labels, img_rgb, img_ir)
+
+        weather_config = self.weather_sim.sample_weather_config(progress) if self.weather_sim else None
+        if self.weather_sim:
+            img_rgb, img_ir = self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config)
+            prev_rgb, prev_ir = self.weather_sim.apply_weather_config(prev_rgb, prev_ir, weather_config)
+
+        modality_dropout = self.sample_modality_dropout_config() if self.enable_modality_dropout else None
+        img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)
+        prev_rgb, prev_ir = self.apply_modality_dropout_config(prev_rgb, prev_ir, modality_dropout)
+
+        return img_rgb, img_ir, prev_rgb, prev_ir, labels

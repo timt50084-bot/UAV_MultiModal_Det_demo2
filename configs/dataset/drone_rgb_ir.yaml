@@ -1,0 +1,17 @@
+# 数据集路径与超参
+# configs/dataset/drone_rgb_ir.yaml
+# DroneVehicle 数据集独立配置 (会覆盖 default.yaml 中的 dataset 节点)
+
+dataset:
+  type: 'DroneDualDataset'
+  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+  split: 'train'
+  imgsz: 1024
+  class_names: ['car', 'truck', 'bus', 'van', 'freight_car']
+
+  # 数据增强可以单独在这里微调
+  aug_cfg:
+    enable_cmcp: True
+    enable_mrre: True
+    enable_weather: True
+    enable_modality_dropout: True
