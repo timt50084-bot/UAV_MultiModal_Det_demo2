@@ -9,7 +9,7 @@ README_PATH = ROOT / 'README.md'
 
 def read_readme():
     if README_PATH.exists():
-        return README_PATH.read_text(encoding='utf-8')
+        return README_PATH.read_text(encoding='utf-8-sig')
     return 'UAV multi-modal OBB detection project.'
 
 

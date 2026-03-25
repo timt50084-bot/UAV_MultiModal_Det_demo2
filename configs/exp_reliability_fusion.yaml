@@ -4,7 +4,6 @@ model:
   channels: [64, 128, 256, 512]
   norm_type: 'GN'
   use_contrastive: False
-
   fusion:
     type: 'ReliabilityAwareFusion'
     hidden_ratio: 0.25

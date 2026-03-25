@@ -1,21 +1,22 @@
-﻿# UAV 多模态旋转框检测项目
+# UAV 多模态旋转框检测项目
 
-一个面向 UAV 场景的 RGB + IR 双模态 OBB（Oriented Bounding Box，旋转框）检测工程。项目采用配置驱动方式组织训练、验证、推理、导出与实验扩展，当前代码已包含可插拔融合模块、面向小目标的分配器、双帧/短时序模块、真实多模态退化增强以及任务导向评测指标。
+一个面向 UAV 场景的 RGB + IR 双模态 OBB（Oriented Bounding Box，旋转框）检测工程。项目采用配置驱动方式组织训练、验证、推理、导出与实验扩展，当前代码已包含可插拔融合模块、面向小目标的分配器、双帧与短时序模块、真实多模态退化增强以及任务导向评测指标。
 
 ## 项目简介
 
 本项目聚焦无人机场景下的小目标、多模态和旋转框检测问题，目标是提供一套可训练、可验证、可推理、可导出的工程化基线，并支持逐步扩展新的 fusion、temporal、assigner、augmentation 与 metrics 模块。
 
-当前代码状态对应的核心能力包括：
+当前代码对应的核心能力包括：
+
 - RGB + IR 双流 backbone
-- 可插拔融合模块（基础融合、RDM、Reliability-Aware Fusion 等）
+- 可插拔融合模块
 - OBB decoupled detection head
-- tiny-object aware assigner
+- 面向 tiny object 的 assigner
 - two-frame temporal refinement 与 short-term temporal memory
 - realistic multimodal augmentation
 - task-specific evaluation metrics
 
-其中部分近期新增能力属于实验性扩展，但代码已存在于当前目录中，可通过配置开启。
+其中部分近期新增能力属于可选或实验性扩展，代码已经存在于当前仓库中，可通过独立配置文件启用。
 
 ## 核心特性
 
@@ -25,7 +26,7 @@
 - Tiny-OBB assigner：支持角度一致性、小目标保护、细长目标保护
 - 时序模块：支持 `off / two_frame / memory` 三种模式
 - 多模态增强：包含 CMCP、MRRE、天气模拟、模态 dropout、跨模态错位、传感器退化增强
-- 任务导向评测：支持 `mAP_50`、`mAP_S`、`Recall_S`、`Precision_S`、可选 `CrossModalRobustness_*`、`TemporalStability`
+- 任务导向评测：支持 `mAP_50`、`mAP_S`、`Recall_S`、`Precision_S`，可选 `CrossModalRobustness_*`、`TemporalStability`
 - 配置驱动：默认配置位于 `configs/default.yaml`，实验配置位于 `configs/exp_*.yaml` 与 `configs/model/*.yaml`
 
 ## 项目结构
@@ -78,14 +79,16 @@ git clone <your-repo-url>
 cd UAV_MultiModal_Det_demo1
 ```
 
-### 2. 创建虚拟环境（可选但建议）
+### 2. 创建虚拟环境
+
+使用 conda：
 
 ```bash
 conda create -n uav-mm-obb python=3.9
 conda activate uav-mm-obb
 ```
 
-或使用 `venv`：
+或使用 venv：
 
 ```bash
 python -m venv .venv
@@ -98,7 +101,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 4. 以开发模式安装项目
+### 4. 开发模式安装
 
 ```bash
 pip install -e .
@@ -144,7 +147,14 @@ cls cx cy w h theta
 
 其中坐标为归一化形式，`theta` 为旋转角。
 
-默认数据根目录在 `configs/default.yaml` 中配置，可按本地路径修改。
+默认数据路径在 `configs/default.yaml` 中配置为示例值：
+
+```yaml
+dataset:
+  root_dir: 'data/drone_rgb_ir'
+```
+
+使用前请按本地数据路径修改 `dataset.root_dir`。
 
 ## 训练方法
 
@@ -172,7 +182,7 @@ python tools/train.py --config configs/exp_task_metrics.yaml
 bash scripts/dist_train.sh 4 configs/default.yaml
 ```
 
-说明：脚本存在于当前仓库中，但实际可用性取决于本地 CUDA / torch.distributed 环境。
+说明：该脚本存在于当前仓库中，但实际可用性取决于本地 CUDA 与 `torch.distributed` 环境。
 
 ## 验证与评估
 
@@ -189,6 +199,7 @@ python tools/val.py --config configs/exp_task_metrics.yaml --weights outputs/wei
 ```
 
 当前评测结果字典兼容以下字段：
+
 - `mAP_50`
 - `mAP_S`
 - `Recall_S`
@@ -198,6 +209,7 @@ python tools/val.py --config configs/exp_task_metrics.yaml --weights outputs/wei
 - `TemporalStability`（可计算时）
 
 说明：
+
 - `Recall_S`、`Precision_S`、`TemporalStability` 越大越好。
 - `CrossModalRobustness_RGBDrop`、`CrossModalRobustness_IRDrop` 表示相对基线的性能下降幅度，越小越好。
 - 若没有可用序列信息，`TemporalStability` 会自动跳过。
@@ -242,6 +254,7 @@ python tools/export.py --config configs/default.yaml --weights outputs/weights/b
 ```
 
 可选参数：
+
 - `--half`：可用 CUDA 时导出 FP16
 - `--dynamic`：启用动态 batch
 
@@ -249,7 +262,7 @@ python tools/export.py --config configs/default.yaml --weights outputs/weights/b
 
 ### 默认配置
 
-- `configs/default.yaml`：全局默认训练/验证配置
+- `configs/default.yaml`：全局默认训练、验证与推理配置
 
 ### 模块切换入口
 
@@ -274,33 +287,31 @@ python tools/export.py --config configs/default.yaml --weights outputs/weights/b
 - Asymmetric dual backbone
 - Enhanced neck
 - OBB decoupled head
-- 基础 OBB NMS 与评测
+- OBB NMS 与基础评测
 
-### 近期新增或扩展模块
-
-以下模块当前代码中已存在：
+### 当前仓库已落地的新增或扩展模块
 
 - `ReliabilityAwareFusion`
   - 位置：`src/model/fusion/reliability_fusion.py`
-  - 用于显式建模 RGB / IR / discrepancy 的动态可靠度加权融合
+  - 状态：可选 / 实验性融合模块
 
 - 改进版 `DynamicTinyOBBAssigner`
   - 位置：`src/loss/assigners/target_assigner.py`
-  - 增加了角度一致性、小目标 top-k 保护、细长目标保护
+  - 状态：已兼容原有接口，新增角度一致性、小目标保护、细长目标保护
 
 - `TemporalMemoryFusion`
   - 位置：`src/model/temporal/temporal_memory.py`
-  - 将时序模块从 two-frame 扩展到兼容 memory 模式
+  - 状态：可选 / 实验性时序扩展模块
 
 - realistic multimodal augmentation
   - 位置：`src/data/transforms/augmentations.py`
-  - 包含 `CrossModalMisalignment` 与 `SensorDegradationAug`
+  - 状态：可选增强模块，包含 `CrossModalMisalignment` 与 `SensorDegradationAug`
 
 - task-specific metrics
   - 位置：`src/metrics/task_specific_metrics.py`
-  - 增加了小目标指标、模态鲁棒性指标和轻量时序稳定性指标
+  - 状态：可选评测扩展，增加小目标指标、模态鲁棒性指标和轻量时序稳定性指标
 
-说明：这些模块属于当前仓库中的可选/实验扩展能力，建议通过独立配置文件逐项启用。
+说明：这些模块都已存在于当前代码目录中，但建议通过独立实验配置逐项启用，而不是一次性全部叠加。
 
 ## 测试
 
