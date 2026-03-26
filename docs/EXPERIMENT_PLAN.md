@@ -1,4 +1,4 @@
-﻿# Experiment Plan
+# Experiment Plan
 
 ## Core Experiments
 
@@ -79,20 +79,27 @@
 - Recommended comparison metrics: `MOTA`, `IDF1`, `IDSwitches`, `Fragmentations`, and the small-object tracking summary.
 - Recommended outputs: `mot_metrics.json`, `tracking_error_summary.json`, `per_sequence_tracking_analysis.json`, `per_track_analysis.csv`, and rendered sequence visualizations when image roots are available.
 - If tracking ground truth is missing, the evaluation entry keeps a structured skip result instead of failing.
+
 ## Tracking Stage 5 Note
 
-- `configs/exp_tracking_modality.yaml` 是阶段 5 的主入口，用于验证模态感知动态关联与场景自适应增强。
-- 推荐与 `configs/exp_tracking_base.yaml`、`configs/exp_tracking_assoc.yaml`、`configs/exp_tracking_temporal.yaml` 做并列比较。
-- 新增重点观察项：`rgb_dominant_association_count`、`ir_dominant_association_count`、`balanced_association_count`、`low_confidence_motion_fallback_count`、`modality_helped_reactivation_count`。
-- 若 `time_of_day / weather` metadata 可用，可进一步观察夜间、雾天、低可见度场景下的关联偏置是否更稳。
+- `configs/exp_tracking_modality.yaml` is the stage-5 entry for modality-aware dynamic association and scene-adaptive tracking.
+- Compare it directly with `exp_tracking_base`, `exp_tracking_assoc`, and `exp_tracking_temporal` to measure how modality awareness helps under night, fog, and low-visibility conditions.
+- Key stage-5 counters to record: `rgb_dominant_association_count`, `ir_dominant_association_count`, `balanced_association_count`, `low_confidence_motion_fallback_count`, and `modality_helped_reactivation_count`.
+- If grouped metadata is available, inspect `time_of_day` and `weather` splits for night / fog robustness.
 
 ## Tracking Stage 6 Note
 
-- `configs/exp_tracking_jointlite.yaml` 是阶段 6 的主入口，用于验证 track-aware detection refinement 的弱耦合协同收益。
-- 推荐与 `configs/exp_tracking_modality.yaml` 做直接对照，观察在小目标、短时漏检和遮挡恢复场景下是否更稳。
-- 新增重点观察项：`rescued_detection_count`、`rescued_small_object_count`、`track_guided_prediction_count`、`predicted_only_track_count`、`refinement_helped_reactivation_count`、`refinement_suppressed_false_drop_count`。
-- 若 tracking ground truth 不完整，也可以先通过 `tracking_results.json + tracking_eval` 的 runtime analysis 查看 refinement 是否帮助减少短时断轨。
+- `configs/exp_tracking_jointlite.yaml` is the stage-6 entry for track-aware detection refinement.
+- Compare it directly with `configs/exp_tracking_modality.yaml` to measure whether low-score rescue and track-guided prediction reduce short-term breaks on small and occluded targets.
+- Key stage-6 counters to record: `rescued_detection_count`, `rescued_small_object_count`, `track_guided_prediction_count`, `predicted_only_track_count`, `refinement_helped_reactivation_count`, and `refinement_suppressed_false_drop_count`.
+- If tracking ground truth is incomplete, keep the runtime analysis and visualization outputs as the first-pass validation path.
 
+## Tracking Stage 7 Note
+
+- `configs/exp_tracking_final.yaml` is the final tracking mainline for stronger detector-tracker collaboration and advanced temporal recovery.
+- Compare it directly with `configs/exp_tracking_jointlite.yaml` to measure whether reactivation, overlap handling, and long-track continuity improve further.
+- Key stage-7 counters to record: `feature_assist_reactivation_count`, `memory_reactivation_count`, `overlap_disambiguation_count`, `overlap_disambiguation_helped_count`, `long_track_continuity_score`, and `small_object_track_survival_rate`.
+- If tracking ground truth is still incomplete, preserve runtime advanced summary outputs and qualitative tracking videos for the report package.
 
 ## Final Closure Workflow
 
@@ -109,16 +116,17 @@
    - Fill `docs/TECHNICAL_PLAN_TEMPLATE.md`
    - Adapt `docs/PPT_OUTLINE.md`
    - Adapt `docs/DEMO_SCRIPT.md`
+   - Fill `docs/RESULTS_TRACKING_TEMPLATE.md`
 
 ### Final Tool Entry Points
 
 - `tools/run_experiment_suite.py`
-  - `--mode plan`: ??????????
-  - `--mode train`: ?? detection ????
-  - `--mode eval`: ?? detection ????
-  - `--mode track_eval`: ?? tracking ?? + tracking eval ??
+  - `--mode plan`: print the unified execution plan without launching experiments
+  - `--mode train`: generate or execute detection training commands
+  - `--mode eval`: generate or execute detection validation commands
+  - `--mode track_eval`: generate tracking inference and offline tracking evaluation commands
 - `tools/summarize_results.py`
-  - ?? detection / tracking ????? CSV ? JSON
+  - collect detection / tracking results into unified CSV and JSON outputs
 
 ### Suggested Deliverables Checklist
 

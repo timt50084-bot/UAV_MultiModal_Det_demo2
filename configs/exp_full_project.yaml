@@ -4,7 +4,9 @@ experiment:
   enable_unified_dirs: True
 
 model:
-  fusion_att_type: 'SimpleConcatFusion'
+  # Final mainline: use the explicit fusion block below as the single active fusion entry.
+  # The legacy fusion_att_type route is intentionally disabled here to avoid ambiguity.
+  fusion_att_type: null
   use_contrastive: False
   fusion:
     type: 'ReliabilityAwareFusion'

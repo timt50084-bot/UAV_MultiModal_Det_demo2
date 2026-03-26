@@ -1,13 +1,16 @@
-﻿# Base configuration for training, validation and inference.
+# Base configuration for training, validation, inference, and lightweight tracking.
 
 batch_size: 2
 num_workers: 8
 use_log_sampler: True
 
+# Experiment routing
 experiment:
   name: ''
   output_root: 'outputs/experiments'
   enable_unified_dirs: False
+
+# Dataset
 
 dataset:
   type: 'DroneDualDataset'
@@ -21,6 +24,7 @@ dataset:
     enable_weather: True
     enable_modality_dropout: True
 
+# Detector model
 model:
   type: 'YOLODualModalOBB'
   num_classes: 5
@@ -29,6 +33,7 @@ model:
   norm_type: 'GN'
   use_contrastive: False
 
+# Assigner and loss
 assigner:
   type: 'DynamicTinyOBBAssigner'
   num_classes: 5
@@ -45,6 +50,7 @@ loss:
   gamma: 2.0
   use_scale_weight: True
 
+# Training and validation
 train:
   epochs: 100
   lr: 0.001
@@ -63,6 +69,7 @@ val:
     max_det: 300
     max_wh: 4096.0
 
+# Inference toolbox
 infer:
   mode: 'fast'
   conf_threshold: null
@@ -79,6 +86,7 @@ infer:
     iou_threshold: 0.55
     max_det: 300
 
+# Tracking
 tracking:
   enabled: False
   method: 'tracking_by_detection'
@@ -167,6 +175,7 @@ tracking:
     assist_gate: 0.6
     lost_track_expansion: 1.25
 
+# Offline tracking evaluation
 tracking_eval:
   enabled: False
   mot_metrics: True
@@ -193,5 +202,3 @@ tracking_eval:
     draw_trails: True
     trail_length: 20
     show_state: True
-
-

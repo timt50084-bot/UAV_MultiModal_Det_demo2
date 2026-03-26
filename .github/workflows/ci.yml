@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 
 on:
   push:
@@ -28,3 +28,6 @@ jobs:
 
       - name: Run config smoke tests
         run: python -m unittest tests.test_experiment_configs
+
+      - name: Run project pipeline smoke tests
+        run: python -m unittest tests.test_project_pipeline_smoke

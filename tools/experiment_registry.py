@@ -1,6 +1,8 @@
+"""Registry helpers for the unified detection and tracking experiment suite."""
+
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import List
 
 
 @dataclass(frozen=True)
@@ -13,20 +15,86 @@ class ExperimentSpec:
 
 
 DETECTION_EXPERIMENTS = (
-    ExperimentSpec('baseline', 'detection', 'configs/exp_baseline.yaml', 'detection_baseline', 'Stable baseline detector.'),
-    ExperimentSpec('fusion_main', 'detection', 'configs/exp_fusion_main.yaml', 'detection_fusion', 'Detection mainline with reliability-aware fusion.'),
-    ExperimentSpec('assigner_main', 'detection', 'configs/exp_assigner_main.yaml', 'detection_assigner', 'Detection mainline with tiny-aware / angle-aware assigner.'),
-    ExperimentSpec('temporal_main', 'detection', 'configs/exp_temporal_main.yaml', 'detection_temporal', 'Detection mainline with temporal memory enabled.'),
-    ExperimentSpec('full_project', 'detection', 'configs/exp_full_project.yaml', 'detection_full', 'Unified full detector configuration.'),
+    ExperimentSpec(
+        'baseline',
+        'detection',
+        'configs/exp_baseline.yaml',
+        'detection_baseline',
+        'Stable baseline detector.',
+    ),
+    ExperimentSpec(
+        'fusion_main',
+        'detection',
+        'configs/exp_fusion_main.yaml',
+        'detection_fusion',
+        'Detection mainline with reliability-aware fusion.',
+    ),
+    ExperimentSpec(
+        'assigner_main',
+        'detection',
+        'configs/exp_assigner_main.yaml',
+        'detection_assigner',
+        'Detection mainline with tiny-aware / angle-aware assigner.',
+    ),
+    ExperimentSpec(
+        'temporal_main',
+        'detection',
+        'configs/exp_temporal_main.yaml',
+        'detection_temporal',
+        'Detection mainline with temporal memory enabled.',
+    ),
+    ExperimentSpec(
+        'full_project',
+        'detection',
+        'configs/exp_full_project.yaml',
+        'detection_full',
+        'Unified full detector configuration.',
+    ),
 )
 
 TRACKING_EXPERIMENTS = (
-    ExperimentSpec('tracking_base', 'tracking', 'configs/exp_tracking_base.yaml', 'tracking_stage1', 'Tracking stage 1: tracking-by-detection baseline.'),
-    ExperimentSpec('tracking_assoc', 'tracking', 'configs/exp_tracking_assoc.yaml', 'tracking_stage2', 'Tracking stage 2: appearance-aware association.'),
-    ExperimentSpec('tracking_temporal', 'tracking', 'configs/exp_tracking_temporal.yaml', 'tracking_stage3', 'Tracking stage 3: temporal memory tracking.'),
-    ExperimentSpec('tracking_modality', 'tracking', 'configs/exp_tracking_modality.yaml', 'tracking_stage5', 'Tracking stage 5: modality-aware dynamic association.'),
-    ExperimentSpec('tracking_jointlite', 'tracking', 'configs/exp_tracking_jointlite.yaml', 'tracking_stage6', 'Tracking stage 6: joint-lite detector-tracker refinement.'),
-    ExperimentSpec('tracking_final', 'tracking', 'configs/exp_tracking_final.yaml', 'tracking_stage7', 'Tracking stage 7: advanced detector-tracker collaboration final.'),
+    ExperimentSpec(
+        'tracking_base',
+        'tracking',
+        'configs/exp_tracking_base.yaml',
+        'tracking_stage1',
+        'Tracking stage 1: tracking-by-detection baseline.',
+    ),
+    ExperimentSpec(
+        'tracking_assoc',
+        'tracking',
+        'configs/exp_tracking_assoc.yaml',
+        'tracking_stage2',
+        'Tracking stage 2: appearance-aware association.',
+    ),
+    ExperimentSpec(
+        'tracking_temporal',
+        'tracking',
+        'configs/exp_tracking_temporal.yaml',
+        'tracking_stage3',
+        'Tracking stage 3: temporal memory tracking.',
+    ),
+    ExperimentSpec(
+        'tracking_modality',
+        'tracking',
+        'configs/exp_tracking_modality.yaml',
+        'tracking_stage5',
+        'Tracking stage 5: modality-aware dynamic association.',
+    ),
+    ExperimentSpec(
+        'tracking_jointlite',
+        'tracking',
+        'configs/exp_tracking_jointlite.yaml',
+        'tracking_stage6',
+        'Tracking stage 6: joint-lite detector-tracker refinement.',
+    ),
+    ExperimentSpec(
+        'tracking_final',
+        'tracking',
+        'configs/exp_tracking_final.yaml',
+        'tracking_stage7',
+        'Tracking stage 7: advanced detector-tracker collaboration final.',
+    ),
 )
 
 ALL_EXPERIMENTS = DETECTION_EXPERIMENTS + TRACKING_EXPERIMENTS
@@ -57,7 +125,10 @@ def infer_detection_weights(spec: ExperimentSpec, experiments_root: str = 'outpu
     return infer_run_root(spec, experiments_root=experiments_root) / 'weights' / 'best.pt'
 
 
-def infer_tracking_detector_weights(experiments_root: str = 'outputs/experiments', detector_run: str = 'full_project') -> Path:
+def infer_tracking_detector_weights(
+    experiments_root: str = 'outputs/experiments',
+    detector_run: str = 'full_project',
+) -> Path:
     return Path(experiments_root) / detector_run / 'weights' / 'best.pt'
 
 

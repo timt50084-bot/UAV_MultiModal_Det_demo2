@@ -1,3 +1,5 @@
+"""Project-level smoke tests for final repository completeness."""
+
 import unittest
 from pathlib import Path
 
@@ -6,25 +8,37 @@ from tools.run_experiment_suite import build_experiment_suite
 from tools.summarize_results import collect_project_summary
 
 
+MAIN_CONFIGS = [
+    'configs/exp_baseline.yaml',
+    'configs/exp_fusion_main.yaml',
+    'configs/exp_assigner_main.yaml',
+    'configs/exp_temporal_main.yaml',
+    'configs/exp_full_project.yaml',
+    'configs/exp_tracking_base.yaml',
+    'configs/exp_tracking_assoc.yaml',
+    'configs/exp_tracking_temporal.yaml',
+    'configs/exp_tracking_modality.yaml',
+    'configs/exp_tracking_jointlite.yaml',
+    'configs/exp_tracking_final.yaml',
+]
+
+DOC_TEMPLATES = [
+    'docs/EXPERIMENT_PLAN.md',
+    'docs/ABLATION_TABLE_TEMPLATE.md',
+    'docs/TECHNICAL_PLAN_TEMPLATE.md',
+    'docs/PPT_OUTLINE.md',
+    'docs/DEMO_SCRIPT.md',
+    'docs/RESULTS_TRACKING_TEMPLATE.md',
+]
+
+
 class ProjectPipelineSmokeTestCase(unittest.TestCase):
     def test_core_configs_load(self):
-        config_paths = [
-            'configs/exp_baseline.yaml',
-            'configs/exp_fusion_main.yaml',
-            'configs/exp_assigner_main.yaml',
-            'configs/exp_temporal_main.yaml',
-            'configs/exp_full_project.yaml',
-            'configs/exp_tracking_base.yaml',
-            'configs/exp_tracking_assoc.yaml',
-            'configs/exp_tracking_temporal.yaml',
-            'configs/exp_tracking_modality.yaml',
-            'configs/exp_tracking_jointlite.yaml',
-            'configs/exp_tracking_final.yaml',
-        ]
-        for config_path in config_paths:
-            self.assertTrue(Path(config_path).exists(), msg=config_path)
-            cfg = load_config(config_path)
-            self.assertIsNotNone(cfg)
+        for config_path in MAIN_CONFIGS:
+            with self.subTest(config_path=config_path):
+                self.assertTrue(Path(config_path).exists(), msg=config_path)
+                cfg = load_config(config_path)
+                self.assertIsNotNone(cfg)
 
     def test_experiment_suite_plan_builds(self):
         suite = build_experiment_suite(mode='plan', subset='all')
@@ -41,16 +55,9 @@ class ProjectPipelineSmokeTestCase(unittest.TestCase):
         self.assertEqual(len(summary['tracking']), 6)
 
     def test_docs_templates_exist(self):
-        docs_paths = [
-            'docs/EXPERIMENT_PLAN.md',
-            'docs/ABLATION_TABLE_TEMPLATE.md',
-            'docs/TECHNICAL_PLAN_TEMPLATE.md',
-            'docs/PPT_OUTLINE.md',
-            'docs/DEMO_SCRIPT.md',
-            'docs/RESULTS_TRACKING_TEMPLATE.md',
-        ]
-        for doc_path in docs_paths:
-            self.assertTrue(Path(doc_path).exists(), msg=doc_path)
+        for doc_path in DOC_TEMPLATES:
+            with self.subTest(doc_path=doc_path):
+                self.assertTrue(Path(doc_path).exists(), msg=doc_path)
 
 
 if __name__ == '__main__':

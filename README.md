@@ -1,4 +1,4 @@
-﻿# UAV Multi-Modal OBB Detection
+# UAV Multi-Modal OBB Detection
 
 面向全天候 UAV 交通场景的 RGB-T 小目标旋转框检测系统。项目当前以“统一配置入口 + 清晰主创新主线 + 可扩展验证体系”为主线，适合作为后续系统训练、消融实验、比赛展示和技术文档整理的工程基线。
 
@@ -188,20 +188,24 @@ python tools/val.py --config configs/exp_full_project.yaml --weights outputs/exp
 python -m unittest tests.test_experiment_configs
 python -m unittest tests.test_eval_full
 python -m unittest tests.test_error_analysis
+python -m unittest tests.test_project_pipeline_smoke
 ```
 
 ## Final Orchestration Tools
 
-???????????????????
+当前仓库已经补齐项目收官阶段的统一工具入口：
 
 - `tools/run_experiment_suite.py`
-  - ???? detection + tracking ??????
-  - ??? `plan` ????????????
+  - 统一编排 detection + tracking 主线实验
+  - 支持 `plan / train / eval / track_eval`
+  - 支持 `--subset detection / tracking / all`
 - `tools/summarize_results.py`
-  - ?????? detection / tracking ??
-  - ???`outputs/summary/detection_summary.csv`?`outputs/summary/tracking_summary.csv`?`outputs/summary/project_summary.json`
+  - 统一汇总 detection / tracking 结果
+  - 输出 `outputs/summary/detection_summary.csv`
+  - 输出 `outputs/summary/tracking_summary.csv`
+  - 输出 `outputs/summary/project_summary.json`
 
-???????
+交付模板位于：
 
 - `docs/ABLATION_TABLE_TEMPLATE.md`
 - `docs/TECHNICAL_PLAN_TEMPLATE.md`
@@ -211,21 +215,22 @@ python -m unittest tests.test_error_analysis
 
 ## Final Recommended Project Flow
 
-?????????
+推荐按以下顺序推进最终项目闭环：
 
-1. ??? detection ???????
+1. 先跑 detection 主线实验
    - `baseline -> fusion_main -> assigner_main -> temporal_main -> full_project`
-2. ??? tracking ?????????
+2. 再跑 tracking 主线实验
    - `tracking_base -> tracking_assoc -> tracking_temporal -> tracking_modality -> tracking_jointlite -> tracking_final`
-3. ????????
-   - `python tools/summarize_results.py`
-4. ????????
+3. 统一汇总结果
+   - `python tools/summarize_results.py --experiments-root outputs/experiments --output-dir outputs/summary`
+4. 回填交付模板
    - `docs/ABLATION_TABLE_TEMPLATE.md`
    - `docs/TECHNICAL_PLAN_TEMPLATE.md`
    - `docs/PPT_OUTLINE.md`
    - `docs/DEMO_SCRIPT.md`
+   - `docs/RESULTS_TRACKING_TEMPLATE.md`
 
-?????
+推荐工具命令：
 
 ```bash
 python tools/run_experiment_suite.py --mode plan --subset all
@@ -234,19 +239,20 @@ python tools/run_experiment_suite.py --mode track_eval --subset tracking --sourc
 python tools/summarize_results.py --experiments-root outputs/experiments --output-dir outputs/summary
 ```
 
-
 ## Repository Structure
 
 ```text
-configs/                 experiment configs
-docs/                    lightweight experiment docs
-scripts/                 optional shell helpers
-src/model/fusion/        fusion mainline modules
-src/loss/assigners/      assigner mainline modules
-src/model/temporal/      temporal mainline modules
-src/metrics/             evaluation and error analysis
-tools/train.py           training entry
-tools/val.py             validation entry
+configs/                     experiment configs
+docs/                        lightweight experiment docs
+scripts/                     optional shell helpers
+src/model/fusion/            fusion mainline modules
+src/loss/assigners/          assigner mainline modules
+src/model/temporal/          temporal mainline modules
+src/metrics/                 evaluation and error analysis
+tools/train.py               training entry
+tools/val.py                 validation entry
+tools/run_experiment_suite.py final orchestration entry
+tools/summarize_results.py   unified results summary entry
 ```
 
 ## Tracking Stage 1
@@ -278,7 +284,7 @@ python tools/infer.py --config configs/exp_tracking_base.yaml --weights outputs/
 
 ## Tracking Comparison Loop
 
-当前 tracking 已经形成 5 个可比较阶段入口：
+当前 tracking 已经形成 6 个可比较阶段入口：
 
 - `configs/exp_tracking_base.yaml`
 - `configs/exp_tracking_assoc.yaml`
@@ -305,6 +311,13 @@ python tools/infer.py --config configs/exp_tracking_base.yaml --weights outputs/
    - `predicted_only_track_count`
    - `refinement_helped_reactivation_count`
    - `refinement_suppressed_false_drop_count`
+6. 在 stage 7 额外查看高级协同摘要：
+   - `feature_assist_reactivation_count`
+   - `memory_reactivation_count`
+   - `overlap_disambiguation_count`
+   - `overlap_disambiguation_helped_count`
+   - `long_track_continuity_score`
+   - `small_object_track_survival_rate`
 
 示例命令：
 
@@ -323,8 +336,4 @@ python tools/val.py --config configs/exp_tracking_eval.yaml tracking_eval.result
 ## Notes
 
 - 当前阶段重点是统一工程入口和主线叙事，不夸大尚未完全验证的能力
-- 建议后续所有系统训练与展示，优先围绕上述 5 个核心配置展开
-
-
-
-
+- 建议后续所有系统训练与展示，优先围绕 detection 的 5 个主配置和 tracking 的 6 个主配置展开

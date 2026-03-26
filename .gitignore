@@ -1,4 +1,4 @@
-﻿# Python cache and build artifacts
+# Python cache and build artifacts
 __pycache__/
 *.pyc
 *.pyo
