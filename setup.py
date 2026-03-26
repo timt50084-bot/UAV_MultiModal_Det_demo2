@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 from setuptools import find_packages, setup
 
@@ -9,7 +9,11 @@ README_PATH = ROOT / 'README.md'
 
 def read_readme():
     if README_PATH.exists():
-        return README_PATH.read_text(encoding='utf-8-sig')
+        for encoding in ('utf-8-sig', 'utf-8', 'gb18030'):
+            try:
+                return README_PATH.read_text(encoding=encoding)
+            except UnicodeDecodeError:
+                continue
     return 'UAV multi-modal OBB detection project.'
 
 
