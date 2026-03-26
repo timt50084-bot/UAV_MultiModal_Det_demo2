@@ -1,0 +1,35 @@
+experiment:
+  name: 'fusion_main'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+model:
+  fusion_att_type: 'SimpleConcatFusion'
+  use_contrastive: False
+  fusion:
+    type: 'ReliabilityAwareFusion'
+    hidden_ratio: 0.25
+    p2_boost_init: 0.1
+  temporal:
+    enabled: False
+    mode: 'off'
+
+assigner:
+  lambda_theta: 0.0
+  tiny_area_threshold: 0.0
+  tiny_topk_boost: 0
+  elongated_ratio_threshold: 1000000000.0
+  use_angle_aware_assign: False
+
+eval:
+  small_object:
+    enabled: True
+    area_threshold: 32
+    iou_threshold: 0.5
+  temporal_stability:
+    enabled: 'auto'
+  group_eval:
+    enabled: True
+    keys: ['time_of_day', 'weather']
+  error_analysis:
+    enabled: False

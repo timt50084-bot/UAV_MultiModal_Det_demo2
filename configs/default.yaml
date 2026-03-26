@@ -4,6 +4,11 @@ batch_size: 2
 num_workers: 8
 use_log_sampler: True
 
+experiment:
+  name: ''
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: False
+
 dataset:
   type: 'DroneDualDataset'
   root_dir: 'data/drone_rgb_ir'
@@ -57,3 +62,19 @@ val:
     iou_thres: 0.45
     max_det: 300
     max_wh: 4096.0
+
+infer:
+  mode: 'fast'
+  conf_threshold: null
+  iou_threshold: null
+  classwise_conf_thresholds: {}
+  multi_scale:
+    enabled: False
+    sizes: []
+  tta:
+    enabled: False
+    horizontal_flip: False
+  merge:
+    method: 'nms'
+    iou_threshold: 0.55
+    max_det: 300

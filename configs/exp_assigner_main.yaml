@@ -1,0 +1,31 @@
+experiment:
+  name: 'assigner_main'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+model:
+  fusion_att_type: 'SimpleConcatFusion'
+  use_contrastive: False
+  temporal:
+    enabled: False
+    mode: 'off'
+
+assigner:
+  lambda_theta: 1.5
+  tiny_area_threshold: 0.01
+  tiny_topk_boost: 2
+  elongated_ratio_threshold: 3.0
+  use_angle_aware_assign: True
+
+eval:
+  small_object:
+    enabled: True
+    area_threshold: 32
+    iou_threshold: 0.5
+  temporal_stability:
+    enabled: 'auto'
+  group_eval:
+    enabled: True
+    keys: ['time_of_day', 'weather', 'occlusion', 'size']
+  error_analysis:
+    enabled: False

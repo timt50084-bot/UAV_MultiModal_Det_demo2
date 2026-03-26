@@ -1,0 +1,19 @@
+eval:
+  enabled: True
+  small_object:
+    enabled: True
+    area_threshold: 32
+    iou_threshold: 0.5
+  cross_modal_robustness:
+    enabled: False
+    base_metric: 'mAP_50'
+    rgb_drop_mode: 'zero'
+    ir_drop_mode: 'zero'
+  temporal_stability:
+    enabled: 'auto'
+    conf_threshold: 0.25
+    match_iou_threshold: 0.3
+    max_center_shift_ratio: 0.1
+  group_eval:
+    enabled: True
+    keys: ['time_of_day', 'weather', 'occlusion', 'size']

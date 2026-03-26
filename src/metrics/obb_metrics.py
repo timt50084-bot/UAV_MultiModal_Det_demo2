@@ -3,6 +3,8 @@ import warnings
 import numpy as np
 from shapely.geometry import Polygon
 
+from src.metrics.grouped_metrics import compute_grouped_metrics
+from src.metrics.task_metrics import normalize_eval_metrics_cfg
 from src.metrics.task_specific_metrics import (
     compute_small_object_metrics,
     compute_temporal_stability,
@@ -74,35 +76,12 @@ def compute_ap(recall, precision):
 class OBBMetricsEvaluator:
     def __init__(self, num_classes=5, small_area_thresh=1024, extra_metrics_cfg=None):
         self.nc = num_classes
-        self.small_area_thresh = small_area_thresh
-        self.extra_metrics_cfg = self._build_extra_metrics_cfg(extra_metrics_cfg)
+        self.default_small_area_thresh = small_area_thresh
+        self.extra_metrics_cfg = normalize_eval_metrics_cfg(extra_metrics_cfg)
+        self.small_area_thresh = resolve_small_area_threshold(
+            self.extra_metrics_cfg['small_object'].get('area_threshold', np.sqrt(float(small_area_thresh)))
+        )
         self.reset()
-
-    def _build_extra_metrics_cfg(self, cfg):
-        cfg = dict(cfg) if cfg is not None else {}
-        small_cfg = dict(cfg.get('small_object', {}))
-        robustness_cfg = dict(cfg.get('cross_modal_robustness', {}))
-        temporal_cfg = dict(cfg.get('temporal_stability', {}))
-        return {
-            'enabled': cfg.get('enabled', False),
-            'small_object': {
-                'enabled': small_cfg.get('enabled', False),
-                'area_threshold': small_cfg.get('area_threshold', 32),
-                'iou_threshold': small_cfg.get('iou_threshold', 0.5),
-            },
-            'cross_modal_robustness': {
-                'enabled': robustness_cfg.get('enabled', False),
-                'base_metric': robustness_cfg.get('base_metric', 'mAP_50'),
-                'rgb_drop_mode': robustness_cfg.get('rgb_drop_mode', 'zero'),
-                'ir_drop_mode': robustness_cfg.get('ir_drop_mode', 'zero'),
-            },
-            'temporal_stability': {
-                'enabled': temporal_cfg.get('enabled', False),
-                'conf_threshold': temporal_cfg.get('conf_threshold', 0.25),
-                'match_iou_threshold': temporal_cfg.get('match_iou_threshold', 0.3),
-                'max_center_shift_ratio': temporal_cfg.get('max_center_shift_ratio', 0.1),
-            },
-        }
 
     def reset(self):
         self.preds = []
@@ -129,12 +108,15 @@ class OBBMetricsEvaluator:
                         'bbox': gt[1:6],
                     })
 
-    def evaluate(self, iou_thresh=0.5, eval_small_only=False):
+    def _compute_detection_metrics(self, preds, gts, iou_thresh=0.5, eval_small_only=False):
         aps = []
+        precisions = []
+        recalls = []
         poly_cache = {}
+
         for class_id in range(self.nc):
-            class_preds = sorted([p for p in self.preds if p['class'] == class_id], key=lambda x: x['score'], reverse=True)
-            class_gts = [g for g in self.gts if g['class'] == class_id]
+            class_preds = sorted([p for p in preds if p['class'] == class_id], key=lambda x: x['score'], reverse=True)
+            class_gts = [g for g in gts if g['class'] == class_id]
             if eval_small_only:
                 class_gts = [g for g in class_gts if (g['bbox'][2] * g['bbox'][3]) < self.small_area_thresh]
 
@@ -151,6 +133,8 @@ class OBBMetricsEvaluator:
             num_dets = len(class_preds)
             if num_dets == 0:
                 aps.append(0.0)
+                precisions.append(0.0)
+                recalls.append(0.0)
                 continue
 
             tp = np.zeros(num_dets)
@@ -182,45 +166,78 @@ class OBBMetricsEvaluator:
             recall = tp_cum / (num_gts + 1e-16)
             precision = tp_cum / (tp_cum + fp_cum + 1e-16)
             aps.append(compute_ap(recall, precision))
+            precisions.append(float(tp.sum() / max(tp.sum() + fp.sum(), 1.0)))
+            recalls.append(float(tp.sum() / max(num_gts, 1)))
 
-        return float(np.mean(aps)) if aps else 0.0
-
-    def get_full_metrics(self):
-        metrics = {
-            'mAP_50': self.evaluate(0.5, False),
-            'mAP_S': self.evaluate(0.5, True),
+        return {
+            'mAP': float(np.mean(aps)) if aps else 0.0,
+            'Precision': float(np.mean(precisions)) if precisions else 0.0,
+            'Recall': float(np.mean(recalls)) if recalls else 0.0,
+            'poly_cache': poly_cache,
         }
 
-        if not self.extra_metrics_cfg.get('enabled', False):
-            return metrics
+    def evaluate(self, iou_thresh=0.5, eval_small_only=False):
+        return self._compute_detection_metrics(self.preds, self.gts, iou_thresh=iou_thresh, eval_small_only=eval_small_only)['mAP']
 
-        poly_cache = {}
+    def _compute_map_range(self, preds, gts, thresholds=None):
+        thresholds = thresholds if thresholds is not None else np.arange(0.5, 1.0, 0.05)
+        map_values = [self._compute_detection_metrics(preds, gts, iou_thresh=thr, eval_small_only=False)['mAP'] for thr in thresholds]
+        return float(np.mean(map_values)) if map_values else 0.0
+
+    def _compute_metrics_dict(self, preds, gts, image_metadata, include_grouped_metrics=True):
+        detection_metrics = self._compute_detection_metrics(preds, gts, iou_thresh=0.5, eval_small_only=False)
+        metrics = {
+            'mAP_50': detection_metrics['mAP'],
+            'mAP_50_95': self._compute_map_range(preds, gts),
+            'Precision': detection_metrics['Precision'],
+            'Recall': detection_metrics['Recall'],
+            'mAP_S': self._compute_detection_metrics(preds, gts, iou_thresh=0.5, eval_small_only=True)['mAP'],
+        }
+
+        poly_cache = detection_metrics['poly_cache']
 
         def match_iou_fn(pred_box, gt_box):
             return polygon_iou(pred_box, gt_box, poly_cache)
 
         small_cfg = self.extra_metrics_cfg['small_object']
-        if small_cfg.get('enabled', False):
-            small_metrics = compute_small_object_metrics(
-                self.preds,
-                self.gts,
-                num_classes=self.nc,
-                area_threshold=resolve_small_area_threshold(small_cfg.get('area_threshold', 32)),
-                iou_threshold=small_cfg.get('iou_threshold', 0.5),
-                match_iou_fn=match_iou_fn,
-            )
-            metrics['Recall_S'] = small_metrics['Recall_S']
-            metrics['Precision_S'] = small_metrics['Precision_S']
+        small_metrics = compute_small_object_metrics(
+            preds,
+            gts,
+            num_classes=self.nc,
+            area_threshold=resolve_small_area_threshold(small_cfg.get('area_threshold', 32)),
+            iou_threshold=small_cfg.get('iou_threshold', 0.5),
+            match_iou_fn=match_iou_fn,
+        )
+        metrics['Recall_S'] = small_metrics['Recall_S']
+        metrics['Precision_S'] = small_metrics['Precision_S']
 
         temporal_cfg = self.extra_metrics_cfg['temporal_stability']
-        if temporal_cfg.get('enabled', False):
+        temporal_enabled = temporal_cfg.get('enabled', 'auto')
+        if temporal_enabled in (True, 'auto'):
             metrics['TemporalStability'] = compute_temporal_stability(
-                self.preds,
-                self.image_metadata,
+                preds,
+                image_metadata,
                 conf_threshold=temporal_cfg.get('conf_threshold', 0.25),
                 match_iou_threshold=temporal_cfg.get('match_iou_threshold', 0.3),
                 max_center_shift_ratio=temporal_cfg.get('max_center_shift_ratio', 0.1),
                 match_iou_fn=match_iou_fn,
             )
 
+        if include_grouped_metrics:
+            metrics['GroupedMetrics'] = compute_grouped_metrics(
+                preds,
+                gts,
+                image_metadata,
+                self.extra_metrics_cfg['group_eval'],
+                lambda sub_preds, sub_gts, sub_metadata: self._compute_metrics_dict(
+                    sub_preds,
+                    sub_gts,
+                    sub_metadata,
+                    include_grouped_metrics=False,
+                ),
+            )
+
         return metrics
+
+    def get_full_metrics(self):
+        return self._compute_metrics_dict(self.preds, self.gts, self.image_metadata, include_grouped_metrics=True)

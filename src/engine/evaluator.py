@@ -1,4 +1,5 @@
 import time
+from copy import deepcopy
 from pathlib import Path
 
 import torch
@@ -6,35 +7,31 @@ import torch.distributed as dist
 from torch.amp import autocast
 from tqdm import tqdm
 
+from src.metrics.error_analysis import ErrorAnalyzer
+from src.metrics.task_metrics import normalize_eval_metrics_cfg
 from src.metrics.task_specific_metrics import compute_cross_modal_robustness, infer_sequence_metadata
 from src.model.bbox_utils import non_max_suppression_obb
 from src.model.output_adapter import flatten_predictions
+from src.utils.postprocess_tuning import apply_classwise_thresholds, normalize_infer_cfg
+from src.utils.result_merge import merge_obb_predictions
+from src.utils.tta import apply_tta_transforms, build_tta_transforms, invert_tta_predictions
 
 
 class Evaluator:
-    def __init__(self, dataloader, metrics_evaluator, device, nms_kwargs=None, extra_metrics_cfg=None):
+    def __init__(self, dataloader, metrics_evaluator, device, nms_kwargs=None, extra_metrics_cfg=None, infer_cfg=None):
         self.dataloader = dataloader
         self.device = device
         self.metrics_evaluator = metrics_evaluator
         self.nms_kwargs = nms_kwargs or {'conf_thres': 0.001, 'iou_thres': 0.45, 'max_det': 300}
-        self.extra_metrics_cfg = self._build_extra_metrics_cfg(extra_metrics_cfg)
+        self.extra_metrics_cfg = normalize_eval_metrics_cfg(extra_metrics_cfg)
+        dataset = getattr(dataloader, 'dataset', None)
+        dataset_imgsz = getattr(dataset, 'img_size', getattr(dataset, 'imgsz', 1024)) if dataset is not None else 1024
+        self.infer_cfg = normalize_infer_cfg(infer_cfg, default_imgsz=dataset_imgsz, nms_cfg=self.nms_kwargs)
+        self.class_names = list(getattr(dataset, 'class_names', [])) if dataset is not None else []
 
         self.rank = 0
         if dist.is_available() and dist.is_initialized():
             self.rank = dist.get_rank()
-
-    def _build_extra_metrics_cfg(self, cfg):
-        cfg = dict(cfg) if cfg is not None else {}
-        robustness_cfg = dict(cfg.get('cross_modal_robustness', {}))
-        return {
-            'enabled': cfg.get('enabled', False),
-            'cross_modal_robustness': {
-                'enabled': robustness_cfg.get('enabled', False),
-                'base_metric': robustness_cfg.get('base_metric', 'mAP_50'),
-                'rgb_drop_mode': robustness_cfg.get('rgb_drop_mode', 'zero'),
-                'ir_drop_mode': robustness_cfg.get('ir_drop_mode', 'zero'),
-            },
-        }
 
     def _maybe_reset_model_temporal_state(self, model):
         if hasattr(model, 'reset_temporal_memory'):
@@ -49,6 +46,25 @@ class Evaluator:
             dropped_ir.zero_()
         return dropped_rgb, dropped_ir
 
+    def _resolve_dataset_metadata(self, dataset, sample_idx):
+        if dataset is None:
+            return None
+
+        if hasattr(dataset, 'get_eval_metadata'):
+            metadata = dataset.get_eval_metadata(sample_idx)
+            return dict(metadata) if isinstance(metadata, dict) else None
+
+        metadata_source = getattr(dataset, 'metadata', None)
+        if isinstance(metadata_source, list) and sample_idx < len(metadata_source):
+            metadata = metadata_source[sample_idx]
+            return dict(metadata) if isinstance(metadata, dict) else None
+
+        if isinstance(metadata_source, dict):
+            metadata = metadata_source.get(sample_idx)
+            return dict(metadata) if isinstance(metadata, dict) else None
+
+        return None
+
     def _build_image_ids_and_metadata(self, epoch, batch_idx, batch_size, sample_offset):
         dataset = getattr(self.dataloader, 'dataset', None)
         image_ids = []
@@ -60,13 +76,97 @@ class Evaluator:
             if rgb_files is not None and global_idx < len(rgb_files):
                 image_path = Path(rgb_files[global_idx])
                 image_id = str(image_path)
-                metadata = infer_sequence_metadata(image_id)
+                metadata = infer_sequence_metadata(image_id) or {}
             else:
                 image_id = f"{epoch}_{self.rank}_{batch_idx}_{sample_idx}"
-                metadata = None
+                metadata = {}
+
+            dataset_metadata = self._resolve_dataset_metadata(dataset, global_idx)
+            if dataset_metadata:
+                metadata.update(dataset_metadata)
+
             image_ids.append(image_id)
-            batch_metadata.append(metadata)
+            batch_metadata.append(metadata or None)
         return image_ids, batch_metadata
+
+    def _snapshot_eval_artifacts(self):
+        return {
+            'preds': deepcopy(getattr(self.metrics_evaluator, 'preds', [])),
+            'gts': deepcopy(getattr(self.metrics_evaluator, 'gts', [])),
+            'image_metadata': deepcopy(getattr(self.metrics_evaluator, 'image_metadata', {})),
+        }
+
+    def _forward_flat_predictions(self, model, imgs_rgb, imgs_ir, prev_rgb, prev_ir):
+        amp_enabled = self.device.type == 'cuda'
+        with autocast(device_type=self.device.type, enabled=amp_enabled):
+            model_out = model(imgs_rgb, imgs_ir, prev_rgb=prev_rgb, prev_ir=prev_ir)
+            outputs = model_out[0] if isinstance(model_out, tuple) else model_out
+            outputs, _ = flatten_predictions(outputs)
+
+        outputs = outputs.detach()
+        outputs = torch.nan_to_num(outputs, nan=0.0, posinf=1e4, neginf=-1e4)
+        outputs[..., :5] = outputs[..., :5].clamp(-1e4, 1e4)
+
+        topk_pre = 3000
+        if outputs.shape[1] > topk_pre:
+            scores = outputs[..., 5:].amax(dim=-1)
+            _, idx = scores.topk(topk_pre, dim=-1)
+            outputs = outputs.gather(1, idx.unsqueeze(-1).expand(-1, -1, outputs.shape[-1]))
+
+        outputs[..., 5:] = outputs[..., 5:].sigmoid()
+        return outputs.float()
+
+    def _run_single_nms(self, flat_preds):
+        preds = non_max_suppression_obb(
+            flat_preds,
+            conf_thres=self.infer_cfg['conf_threshold'],
+            iou_thres=self.infer_cfg['iou_threshold'],
+            max_det=self.infer_cfg['merge']['max_det'],
+            max_wh=self.nms_kwargs.get('max_wh', 4096.0),
+        )
+        return [
+            apply_classwise_thresholds(
+                pred,
+                class_names=self.class_names,
+                global_conf_threshold=self.infer_cfg['conf_threshold'],
+                classwise_conf_thresholds=self.infer_cfg.get('classwise_conf_thresholds', {}),
+            )
+            for pred in preds
+        ]
+
+    def _predict_batch(self, model, imgs_rgb, imgs_ir, prev_rgb, prev_ir):
+        base_size = imgs_rgb.shape[-1]
+        use_toolbox = self.infer_cfg.get('enabled', False) or self.infer_cfg.get('mode', 'fast') != 'fast'
+
+        if not use_toolbox:
+            return self._run_single_nms(self._forward_flat_predictions(model, imgs_rgb, imgs_ir, prev_rgb, prev_ir))
+
+        transforms = build_tta_transforms(self.infer_cfg, base_size)
+        merged_per_image = [[] for _ in range(imgs_rgb.shape[0])]
+
+        for transform_cfg in transforms:
+            aug_rgb, aug_ir, aug_prev_rgb, aug_prev_ir = apply_tta_transforms(
+                imgs_rgb,
+                imgs_ir,
+                prev_rgb,
+                prev_ir,
+                transform_cfg,
+            )
+            aug_preds = self._run_single_nms(self._forward_flat_predictions(model, aug_rgb, aug_ir, aug_prev_rgb, aug_prev_ir))
+            for batch_idx, pred in enumerate(aug_preds):
+                merged_per_image[batch_idx].append(
+                    invert_tta_predictions(pred, transform_cfg=transform_cfg, base_size=base_size)
+                )
+
+        return [
+            merge_obb_predictions(
+                prediction_sets,
+                method=self.infer_cfg['merge']['method'],
+                iou_threshold=self.infer_cfg['merge']['iou_threshold'],
+                max_det=self.infer_cfg['merge']['max_det'],
+            )
+            for prediction_sets in merged_per_image
+        ]
 
     def _run_eval_pass(self, model, epoch=-1, rgb_drop_mode=None, ir_drop_mode=None, desc_prefix='Val'):
         model.eval()
@@ -90,33 +190,11 @@ class Evaluator:
             if profile_speed:
                 torch.cuda.synchronize()
             t1 = time.time()
-
-            with autocast(device_type=self.device.type, enabled=amp_enabled):
-                model_out = model(eval_rgb, eval_ir, prev_rgb=eval_prev_rgb, prev_ir=eval_prev_ir)
-                outputs = model_out[0] if isinstance(model_out, tuple) else model_out
-                outputs, _ = flatten_predictions(outputs)
-
+            preds = self._predict_batch(model, eval_rgb, eval_ir, eval_prev_rgb, eval_prev_ir)
             if profile_speed:
                 torch.cuda.synchronize()
             t2 = time.time()
-
-            outputs = outputs.detach()
-            outputs = torch.nan_to_num(outputs, nan=0.0, posinf=1e4, neginf=-1e4)
-            outputs[..., :5] = outputs[..., :5].clamp(-1e4, 1e4)
-
-            topk_pre = 3000
-            if outputs.shape[1] > topk_pre:
-                scores = outputs[..., 5:].amax(dim=-1)
-                _, idx = scores.topk(topk_pre, dim=-1)
-                outputs = outputs.gather(1, idx.unsqueeze(-1).expand(-1, -1, outputs.shape[-1]))
-
-            outputs[..., 5:] = outputs[..., 5:].sigmoid()
-            outputs = outputs.float()
-            preds = non_max_suppression_obb(outputs, **self.nms_kwargs)
-
-            if profile_speed:
-                torch.cuda.synchronize()
-            t3 = time.time()
+            t3 = t2
 
             targets_np = targets.cpu().numpy()
             gt_dict = {b: [] for b in range(eval_rgb.shape[0])}
@@ -137,22 +215,27 @@ class Evaluator:
     @torch.no_grad()
     def evaluate(self, model, epoch=-1):
         baseline_metrics = self._run_eval_pass(model, epoch=epoch, desc_prefix='Val')
+        baseline_artifacts = self._snapshot_eval_artifacts()
         metrics = dict(baseline_metrics)
 
         robustness_cfg = self.extra_metrics_cfg['cross_modal_robustness']
-        if self.extra_metrics_cfg.get('enabled', False) and robustness_cfg.get('enabled', False):
+        rgb_artifacts = None
+        ir_artifacts = None
+        if robustness_cfg.get('enabled', False):
             rgb_metrics = self._run_eval_pass(
                 model,
                 epoch=epoch,
                 rgb_drop_mode=robustness_cfg.get('rgb_drop_mode', 'zero'),
                 desc_prefix='Val RGBDrop',
             )
+            rgb_artifacts = self._snapshot_eval_artifacts()
             ir_metrics = self._run_eval_pass(
                 model,
                 epoch=epoch,
                 ir_drop_mode=robustness_cfg.get('ir_drop_mode', 'zero'),
                 desc_prefix='Val IRDrop',
-            )
+                )
+            ir_artifacts = self._snapshot_eval_artifacts()
             metrics.update(compute_cross_modal_robustness(
                 baseline_metrics,
                 rgb_metrics,
@@ -160,11 +243,35 @@ class Evaluator:
                 base_metric=robustness_cfg.get('base_metric', 'mAP_50'),
             ))
 
+        error_cfg = self.extra_metrics_cfg['error_analysis']
+        if error_cfg.get('enabled', False):
+            dataset = getattr(self.dataloader, 'dataset', None)
+            class_names = list(getattr(dataset, 'class_names', [])) if dataset is not None else []
+            analysis = ErrorAnalyzer(
+                cfg=self.extra_metrics_cfg,
+                class_names=class_names,
+            ).analyze(
+                baseline_artifacts['preds'],
+                baseline_artifacts['gts'],
+                image_metadata=baseline_artifacts['image_metadata'],
+                rgb_drop_data=rgb_artifacts,
+                ir_drop_data=ir_artifacts,
+                grouped_metrics=baseline_metrics.get('GroupedMetrics'),
+            )
+            metrics['ErrorAnalysis'] = analysis['summary']
+            if analysis.get('exported_files'):
+                metrics['ErrorAnalysisFiles'] = analysis['exported_files']
+
         if self.rank == 0:
             print(
                 f"\n[Val Report] mAP@0.5: {metrics.get('mAP_50', 0):.4f} | "
+                f"mAP@0.5:0.95: {metrics.get('mAP_50_95', 0):.4f} | "
+                f"P: {metrics.get('Precision', 0):.4f} | "
+                f"R: {metrics.get('Recall', 0):.4f} | "
                 f"AP_S: {metrics.get('mAP_S', 0):.4f}"
             )
+            if 'ErrorAnalysisFiles' in metrics:
+                print(f"[Val ErrorAnalysis] exported to: {metrics['ErrorAnalysisFiles']}")
 
         model.train()
         return metrics

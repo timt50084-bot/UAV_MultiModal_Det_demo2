@@ -1,0 +1,23 @@
+experiment:
+  name: 'competition_infer'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+infer:
+  mode: 'competition'
+  conf_threshold: 0.25
+  iou_threshold: 0.5
+  multi_scale:
+    enabled: True
+    sizes: [640, 768, 896]
+  tta:
+    enabled: True
+    horizontal_flip: True
+  merge:
+    method: 'nms'
+    iou_threshold: 0.55
+    max_det: 300
+  classwise_conf_thresholds:
+    car: 0.20
+    truck: 0.30
+    bus: 0.28

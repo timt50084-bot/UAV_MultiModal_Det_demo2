@@ -15,6 +15,7 @@ from src.loss.builder import build_assigner, build_loss
 from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
 from src.utils.config import load_config
+from src.utils.config_utils import apply_experiment_runtime_overrides
 
 
 def set_seed(seed=42):
@@ -35,9 +36,11 @@ def parse_args():
 def main():
     args = parse_args()
     cfg = load_config(args.config)
+    cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
 
     device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
     print(f'\nTraining device: {device}')
+    print(f'Experiment name: {run_name}')
     set_seed(42)
 
     if device.type == 'cuda':
@@ -58,9 +61,17 @@ def main():
     criterion = build_loss(cfg.loss).to(device)
     assigner = build_assigner(cfg.assigner).to(device)
 
-    extra_metrics_cfg = cfg.get('eval', {}).get('extra_metrics', {}) if hasattr(cfg, 'get') else {}
+    extra_metrics_cfg = cfg.get('eval', {}) if hasattr(cfg, 'get') else {}
+    infer_cfg = cfg.get('infer', {}) if hasattr(cfg, 'get') else {}
     metrics_evaluator = OBBMetricsEvaluator(num_classes=cfg.model.num_classes, extra_metrics_cfg=extra_metrics_cfg)
-    evaluator = Evaluator(val_loader, metrics_evaluator, device, nms_kwargs=cfg.val.nms, extra_metrics_cfg=extra_metrics_cfg)
+    evaluator = Evaluator(
+        val_loader,
+        metrics_evaluator,
+        device,
+        nms_kwargs=cfg.val.nms,
+        extra_metrics_cfg=extra_metrics_cfg,
+        infer_cfg=infer_cfg,
+    )
 
     callbacks = [
         EMACallback(model),

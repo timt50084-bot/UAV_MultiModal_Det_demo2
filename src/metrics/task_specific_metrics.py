@@ -99,6 +99,8 @@ def compute_cross_modal_robustness(base_metrics, rgb_drop_metrics, ir_drop_metri
 
     return {
         'CrossModalRobustness_BaseMetric': base_metric,
+        'RGBOnly_mAP50': ir_drop_value,
+        'IROnly_mAP50': rgb_drop_value,
         'RGBDrop_mAP50': rgb_drop_value,
         'IRDrop_mAP50': ir_drop_value,
         'CrossModalRobustness_RGBDrop': baseline_value - rgb_drop_value,
