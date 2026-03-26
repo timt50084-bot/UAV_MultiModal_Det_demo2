@@ -1,86 +1,13 @@
-﻿# Base configuration for training, validation and inference.
-
-batch_size: 2
-num_workers: 8
-use_log_sampler: True
-
-experiment:
-  name: ''
+﻿experiment:
+  name: 'tracking_jointlite'
   output_root: 'outputs/experiments'
-  enable_unified_dirs: False
-
-dataset:
-  type: 'DroneDualDataset'
-  root_dir: 'data/drone_rgb_ir'
-  split: 'train'
-  imgsz: 1024
-  class_names: ['car', 'truck', 'bus', 'van', 'freight_car']
-  aug_cfg:
-    enable_cmcp: True
-    enable_mrre: True
-    enable_weather: True
-    enable_modality_dropout: True
-
-model:
-  type: 'YOLODualModalOBB'
-  num_classes: 5
-  channels: [64, 128, 256, 512]
-  fusion_att_type: 'JCA'
-  norm_type: 'GN'
-  use_contrastive: False
-
-assigner:
-  type: 'DynamicTinyOBBAssigner'
-  num_classes: 5
-  topk: 10
-  alpha: 0.5
-  beta: 6.0
-  temperature: 2.0
-  eps: 1e-9
-
-loss:
-  type: 'UAVDualModalLoss'
-  num_classes: 5
-  alpha: 0.25
-  gamma: 2.0
-  use_scale_weight: True
-
-train:
-  epochs: 100
-  lr: 0.001
-  weight_decay: 0.0005
-  lrf: 0.01
-  accumulate: 8
-  use_amp: True
-  grad_clip: 10.0
-  patience: 50
-  save_dir: 'outputs/weights'
-
-val:
-  nms:
-    conf_thres: 0.001
-    iou_thres: 0.45
-    max_det: 300
-    max_wh: 4096.0
+  enable_unified_dirs: True
 
 infer:
   mode: 'fast'
-  conf_threshold: null
-  iou_threshold: null
-  classwise_conf_thresholds: {}
-  multi_scale:
-    enabled: False
-    sizes: []
-  tta:
-    enabled: False
-    horizontal_flip: False
-  merge:
-    method: 'nms'
-    iou_threshold: 0.55
-    max_det: 300
 
 tracking:
-  enabled: False
+  enabled: True
   method: 'tracking_by_detection'
   max_age: 30
   min_hits: 3
@@ -92,30 +19,34 @@ tracking:
   use_kalman: True
   angle_smoothing: 0.7
   keep_history: 20
+
   appearance:
-    enabled: False
+    enabled: True
     embedding_dim: 128
     update_mode: 'ema'
     history_size: 5
     ema_momentum: 0.8
     sampling_radius: 1
-    use_rgb_ir_branches: False
+    use_rgb_ir_branches: True
+
   memory:
-    enabled: False
+    enabled: True
     size: 5
     fusion: 'weighted_mean'
     decay: 0.8
     use_temporal_consistency: True
     lost_track_expansion: 1.25
+
   modality:
-    enabled: False
+    enabled: True
     use_scene_adaptation: False
     reliability_source: 'auto'
     reliability_ema: 0.8
     night_motion_boost: 0.2
     fog_temporal_boost: 0.2
+
   refinement:
-    enabled: False
+    enabled: True
     rescue_low_score: True
     rescue_score_threshold: 0.15
     rescue_match_iou: 0.2
@@ -125,6 +56,7 @@ tracking:
     predicted_track_score: 0.1
     keep_small_tracked_candidates: True
     keep_tracked_overlap_candidates: True
+
   feature_assist:
     enabled: False
     source: 'temporal_fused'
@@ -132,30 +64,34 @@ tracking:
     use_for_reactivation: True
     use_for_overlap_resolution: True
     sampling_radius: 1
+
   reactivation:
     enabled: False
     max_reactivate_age: 8
     use_memory_reactivation: True
     use_feature_assist_reactivation: True
     reactivation_gate: 0.4
+
   overlap_disambiguation:
     enabled: False
     overlap_iou_threshold: 0.45
     ambiguity_margin: 0.10
     assist_margin: 0.05
+
   smoothing:
-    enabled: False
+    enabled: True
     bbox_ema: 0.7
     angle_ema: 0.6
+
   association:
-    use_appearance: False
-    use_temporal_memory: False
-    use_modality_awareness: False
+    use_appearance: True
+    use_temporal_memory: True
+    use_modality_awareness: True
     use_feature_assist: False
-    dynamic_weighting: False
+    dynamic_weighting: True
     w_motion: 0.25
     w_iou: 0.60
-    w_app: 0.50
+    w_app: 0.60
     w_temporal: 0.30
     w_score: 0.15
     w_assist: 0.35
@@ -168,7 +104,7 @@ tracking:
     lost_track_expansion: 1.25
 
 tracking_eval:
-  enabled: False
+  enabled: True
   mot_metrics: True
   error_analysis: True
   export_results: True
@@ -193,5 +129,3 @@ tracking_eval:
     draw_trails: True
     trail_length: 20
     show_state: True
-
-

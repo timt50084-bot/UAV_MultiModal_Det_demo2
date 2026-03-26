@@ -1,4 +1,4 @@
-from copy import deepcopy
+﻿from copy import deepcopy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -86,6 +86,14 @@ class YOLODualModalOBB(nn.Module):
     def _clone_feature_tuple(self, feats):
         return tuple(feat.detach().clone() for feat in feats)
 
+    def _build_tracking_feature_payload(self, enhanced_feats, feat_rgb, feat_ir, input_hw):
+        return {
+            'fused_feats': tuple(feat.detach().clone() for feat in enhanced_feats),
+            'rgb_feats': tuple(feat.detach().clone() for feat in feat_rgb),
+            'ir_feats': tuple(feat.detach().clone() for feat in feat_ir),
+            'input_hw': tuple(int(value) for value in input_hw),
+        }
+
     def reset_temporal_memory(self):
         self.temporal_memory = []
 
@@ -111,7 +119,7 @@ class YOLODualModalOBB(nn.Module):
             return [prev_enhanced_feats]
         return []
 
-    def forward(self, img_rgb, img_ir, prev_rgb=None, prev_ir=None, memory_feats=None, return_attention_map=False):
+    def forward(self, img_rgb, img_ir, prev_rgb=None, prev_ir=None, memory_feats=None, return_attention_map=False, return_tracking_features=False):
         self.last_temporal_state = None
         enhanced_feats, feat_rgb, feat_ir, att_maps, target_hw = self._extract_features(
             img_rgb, img_ir, return_attention_map=return_attention_map
@@ -156,6 +164,7 @@ class YOLODualModalOBB(nn.Module):
             self.update_temporal_memory(current_feats_before_temporal)
 
         outputs = self.head(enhanced_feats)
+        tracking_payload = self._build_tracking_feature_payload(enhanced_feats, feat_rgb, feat_ir, target_hw) if return_tracking_features else None
 
         if return_attention_map:
             merged_maps = {}
@@ -163,7 +172,11 @@ class YOLODualModalOBB(nn.Module):
                 merged_maps.update(att_maps)
             if temporal_maps:
                 merged_maps.update(temporal_maps)
+            if return_tracking_features:
+                return outputs, merged_maps, feat_rgb, feat_ir, tracking_payload
             return outputs, merged_maps, feat_rgb, feat_ir
+        if return_tracking_features:
+            return outputs, feat_rgb, feat_ir, tracking_payload
         return outputs, feat_rgb, feat_ir
 
     def get_temporal_consistency_loss(self, lambda_t=0.1, low_motion_bias=0.75):

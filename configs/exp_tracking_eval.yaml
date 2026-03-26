@@ -1,0 +1,35 @@
+﻿experiment:
+  name: 'tracking_eval'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+tracking:
+  enabled: True
+  method: 'tracking_by_detection'
+
+tracking_eval:
+  enabled: True
+  mot_metrics: True
+  error_analysis: True
+  export_results: True
+  save_visualizations: True
+  export_json: True
+  export_csv: True
+  export_mot_txt: True
+  output_dir: 'outputs/tracking_eval'
+  results_path: ''
+  gt_path: ''
+  image_root: ''
+  small_object_area_threshold: 32
+  matching:
+    iou_threshold: 0.5
+    use_obb_iou: True
+    class_aware: True
+  grouped_analysis:
+    enabled: True
+    keys: ['time_of_day', 'weather', 'size_group']
+  visualization:
+    enabled: True
+    draw_trails: True
+    trail_length: 20
+    show_state: True

@@ -190,6 +190,51 @@ python -m unittest tests.test_eval_full
 python -m unittest tests.test_error_analysis
 ```
 
+## Final Orchestration Tools
+
+???????????????????
+
+- `tools/run_experiment_suite.py`
+  - ???? detection + tracking ??????
+  - ??? `plan` ????????????
+- `tools/summarize_results.py`
+  - ?????? detection / tracking ??
+  - ???`outputs/summary/detection_summary.csv`?`outputs/summary/tracking_summary.csv`?`outputs/summary/project_summary.json`
+
+???????
+
+- `docs/ABLATION_TABLE_TEMPLATE.md`
+- `docs/TECHNICAL_PLAN_TEMPLATE.md`
+- `docs/PPT_OUTLINE.md`
+- `docs/DEMO_SCRIPT.md`
+- `docs/RESULTS_TRACKING_TEMPLATE.md`
+
+## Final Recommended Project Flow
+
+?????????
+
+1. ??? detection ???????
+   - `baseline -> fusion_main -> assigner_main -> temporal_main -> full_project`
+2. ??? tracking ?????????
+   - `tracking_base -> tracking_assoc -> tracking_temporal -> tracking_modality -> tracking_jointlite -> tracking_final`
+3. ????????
+   - `python tools/summarize_results.py`
+4. ????????
+   - `docs/ABLATION_TABLE_TEMPLATE.md`
+   - `docs/TECHNICAL_PLAN_TEMPLATE.md`
+   - `docs/PPT_OUTLINE.md`
+   - `docs/DEMO_SCRIPT.md`
+
+?????
+
+```bash
+python tools/run_experiment_suite.py --mode plan --subset all
+python tools/run_experiment_suite.py --mode train --subset detection --emit-script outputs/summary/detection_train_plan.bat
+python tools/run_experiment_suite.py --mode track_eval --subset tracking --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --tracking_gt path/to/tracking_gt.json --emit-script outputs/summary/tracking_eval_plan.bat
+python tools/summarize_results.py --experiments-root outputs/experiments --output-dir outputs/summary
+```
+
+
 ## Repository Structure
 
 ```text
@@ -204,7 +249,82 @@ tools/train.py           training entry
 tools/val.py             validation entry
 ```
 
+## Tracking Stage 1
+
+当前仓库已提供最小可运行的 OBB-aware tracking-by-detection 基础版：
+
+- 基础配置：`configs/exp_tracking_base.yaml`
+- 主要模块：`src/tracking/`
+- 推荐入口：`tools/infer.py` 或兼容保留的 `tools/track.py`
+
+序列推理示例：
+
+```bash
+python tools/infer.py --config configs/exp_tracking_base.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_base
+```
+
+阶段 1 当前范围：
+
+- 基于检测结果分配和维护 `track_id`
+- 短时漏检下维持轨迹
+- 输出逐帧带 `track_id` 的结果和 `tracking_results.json`
+
+阶段 1 暂不包含：
+
+- ReID / appearance embedding
+- 多帧 feature fusion tracking
+- 完整 MOT 指标评估
+- modality-aware association
+
+## Tracking Comparison Loop
+
+当前 tracking 已经形成 5 个可比较阶段入口：
+
+- `configs/exp_tracking_base.yaml`
+- `configs/exp_tracking_assoc.yaml`
+- `configs/exp_tracking_temporal.yaml`
+- `configs/exp_tracking_modality.yaml`
+- `configs/exp_tracking_jointlite.yaml`
+- `configs/exp_tracking_final.yaml`
+
+推荐比较顺序：
+
+1. 先用 `tools/infer.py` 分别导出各阶段的 `tracking_results.json`
+2. 再用 `configs/exp_tracking_eval.yaml` 做离线 tracking 评估
+3. 重点比较 `MOTA / IDF1 / IDSwitches / Fragmentations / small-object tracking summary`
+4. 在 stage 5 额外查看模态感知关联摘要：
+   - `rgb_dominant_association_count`
+   - `ir_dominant_association_count`
+   - `balanced_association_count`
+   - `low_confidence_motion_fallback_count`
+   - `modality_helped_reactivation_count`
+5. 在 stage 6 额外查看检测-跟踪弱耦合协同摘要：
+   - `rescued_detection_count`
+   - `rescued_small_object_count`
+   - `track_guided_prediction_count`
+   - `predicted_only_track_count`
+   - `refinement_helped_reactivation_count`
+   - `refinement_suppressed_false_drop_count`
+
+示例命令：
+
+```bash
+python tools/infer.py --config configs/exp_tracking_base.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_base
+python tools/infer.py --config configs/exp_tracking_assoc.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_assoc
+python tools/infer.py --config configs/exp_tracking_temporal.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_temporal
+python tools/infer.py --config configs/exp_tracking_modality.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_modality
+python tools/infer.py --config configs/exp_tracking_jointlite.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_jointlite
+python tools/infer.py --config configs/exp_tracking_final.yaml --weights outputs/experiments/full_project/weights/best.pt --source_rgb path/to/rgb_frames --source_ir path/to/ir_frames --save_dir outputs/tracking_final
+python tools/val.py --config configs/exp_tracking_eval.yaml tracking_eval.results_path=outputs/tracking_final/tracking_results.json tracking_eval.gt_path=path/to/tracking_gt.json
+```
+
+如果当前还没有稳定的 tracking ground truth，`tracking_eval` 会优雅跳过 MOT 指标，但仍可保留统一导出、可视化和分析入口。
+
 ## Notes
 
 - 当前阶段重点是统一工程入口和主线叙事，不夸大尚未完全验证的能力
 - 建议后续所有系统训练与展示，优先围绕上述 5 个核心配置展开
+
+
+
+

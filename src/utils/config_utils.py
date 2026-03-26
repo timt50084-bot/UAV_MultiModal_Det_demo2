@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 def infer_experiment_name(cfg, config_path=None):
@@ -38,5 +38,10 @@ def apply_experiment_runtime_overrides(cfg, config_path=None):
             current_output_dir = error_cfg.get('output_dir', 'outputs/error_analysis')
             if current_output_dir in {'', 'outputs/error_analysis'}:
                 cfg.eval.error_analysis.output_dir = str(run_root / 'error_analysis')
+
+    if 'tracking_eval' in cfg and cfg.tracking_eval is not None:
+        current_output_dir = cfg.tracking_eval.get('output_dir', 'outputs/tracking_eval')
+        if current_output_dir in {'', 'outputs/tracking_eval'}:
+            cfg.tracking_eval.output_dir = str(run_root / 'tracking_eval')
 
     return cfg, run_name

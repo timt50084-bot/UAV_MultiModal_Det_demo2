@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import random
 
 import numpy as np
@@ -8,6 +8,7 @@ from src.data.dataloader import build_dataloader
 from src.engine.evaluator import Evaluator
 from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
+from src.tracking import TrackingEvaluator, normalize_tracking_cfg, normalize_tracking_eval_cfg
 from src.utils.config import load_config
 from src.utils.config_utils import apply_experiment_runtime_overrides
 
@@ -22,9 +23,54 @@ def set_seed(seed=42):
 def parse_args():
     parser = argparse.ArgumentParser(description='Validate the dual-modal OBB detector.')
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
-    parser.add_argument('--weights', type=str, required=True, help='Checkpoint to validate.')
+    parser.add_argument('--weights', type=str, default='', help='Checkpoint to validate. Required for detection validation unless tracking_eval.results_path is used.')
     parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
     return parser.parse_args()
+
+
+def print_tracking_eval_result(result):
+    if not result:
+        return
+    print('\nTracking evaluation')
+    print('-' * 48)
+    if not result.get('available', False):
+        print(f"Status: skipped ({result.get('reason', 'missing_tracking_gt')})")
+        if result.get('exported_files'):
+            print(f"TrackingEvalFiles: {result['exported_files']}")
+        return
+
+    metrics = result.get('metrics') or {}
+    print(f"MOTA: {metrics.get('MOTA')}")
+    print(f"IDF1: {metrics.get('IDF1')}")
+    print(f"IDSwitches: {metrics.get('IDSwitches')}")
+    print(f"MostlyTracked: {metrics.get('MostlyTracked')}")
+    print(f"MostlyLost: {metrics.get('MostlyLost')}")
+    print(f"Fragmentations: {metrics.get('Fragmentations')}")
+    if result.get('analysis'):
+        summary = result['analysis'].get('summary') or {}
+        print(f"TrackingEvalAnalysis: {summary}")
+        refinement_keys = ['rescued_detection_count', 'rescued_small_object_count', 'track_guided_prediction_count', 'predicted_only_track_count', 'refinement_helped_reactivation_count', 'refinement_suppressed_false_drop_count']
+        refinement_summary = {key: summary.get(key) for key in refinement_keys if key in summary}
+        if refinement_summary:
+            print(f"TrackingEvalRefinementSummary: {refinement_summary}")
+        advanced_keys = ['feature_assist_reactivation_count', 'memory_reactivation_count', 'overlap_disambiguation_count', 'overlap_disambiguation_helped_count', 'reactivating_state_count', 'predicted_only_to_tracked_count', 'long_track_continuity_score', 'small_object_track_survival_rate']
+        advanced_summary = {key: summary.get(key) for key in advanced_keys if key in summary}
+        if advanced_summary:
+            print(f"TrackingEvalAdvancedSummary: {advanced_summary}")
+    if result.get('exported_files'):
+        print(f"TrackingEvalFiles: {result['exported_files']}")
+
+
+def run_tracking_eval_only(cfg):
+    tracking_eval_cfg = normalize_tracking_eval_cfg(cfg.get('tracking_eval', {}))
+    class_names = list(getattr(cfg.dataset, 'class_names', [])) if 'dataset' in cfg else []
+    tracking_evaluator = TrackingEvaluator(tracking_eval_cfg, class_names=class_names)
+    result = tracking_evaluator.evaluate_from_files(
+        tracking_eval_cfg.get('results_path'),
+        gt_path=tracking_eval_cfg.get('gt_path') or None,
+    )
+    print_tracking_eval_result(result)
+    return result
 
 
 def main():
@@ -32,9 +78,23 @@ def main():
     cfg = load_config(args.config)
     cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
 
+    tracking_cfg = normalize_tracking_cfg(cfg.get('tracking', {}))
+    tracking_eval_cfg = normalize_tracking_eval_cfg(cfg.get('tracking_eval', {}))
+
+    if tracking_eval_cfg['enabled'] and tracking_eval_cfg.get('results_path') and not args.weights:
+        print(f'Experiment name: {run_name}')
+        run_tracking_eval_only(cfg)
+        return
+
+    if not args.weights:
+        raise ValueError('--weights is required for detection validation unless tracking_eval.results_path is provided.')
+
     device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
     print(f'\nValidation device: {device}')
     print(f'Experiment name: {run_name}')
+
+    if tracking_cfg['enabled']:
+        print('Tracking is enabled in this config. Detection validation remains the default path; tracking evaluation is only activated when tracking_eval.enabled=True.')
 
     set_seed(42)
     if device.type == 'cuda':
@@ -59,6 +119,20 @@ def main():
 
     print('\nStarting validation...')
     metrics = evaluator.evaluate(model, epoch='Final')
+
+    if tracking_eval_cfg['enabled']:
+        tracking_evaluator = TrackingEvaluator(tracking_eval_cfg, class_names=cfg.dataset.class_names)
+        if tracking_eval_cfg.get('results_path'):
+            tracking_result = tracking_evaluator.evaluate_from_files(
+                tracking_eval_cfg.get('results_path'),
+                gt_path=tracking_eval_cfg.get('gt_path') or None,
+            )
+        else:
+            tracking_result = tracking_evaluator.evaluate_from_dataset(getattr(val_loader, 'dataset', None))
+        metrics['TrackingEval'] = tracking_result.get('metrics')
+        metrics['TrackingEvalAnalysis'] = tracking_result.get('analysis', {}).get('summary') if tracking_result.get('analysis') else None
+        if tracking_result.get('exported_files'):
+            metrics['TrackingEvalFiles'] = tracking_result['exported_files']
 
     print('\nFinal metrics')
     print('-' * 48)
@@ -91,7 +165,22 @@ def main():
         print(f"ErrorAnalysis: {metrics['ErrorAnalysis']}")
     if 'ErrorAnalysisFiles' in metrics:
         print(f"ErrorAnalysisFiles: {metrics['ErrorAnalysisFiles']}")
+    if 'TrackingEval' in metrics or 'TrackingEvalFiles' in metrics:
+        print_tracking_eval_result(
+            {
+                'available': metrics.get('TrackingEval') is not None,
+                'reason': 'missing_tracking_gt' if metrics.get('TrackingEval') is None else None,
+                'metrics': metrics.get('TrackingEval'),
+                'analysis': {'summary': metrics.get('TrackingEvalAnalysis')} if metrics.get('TrackingEvalAnalysis') is not None else None,
+                'exported_files': metrics.get('TrackingEvalFiles', {}),
+            }
+        )
 
 
 if __name__ == '__main__':
     main()
+
+
+
+
+
