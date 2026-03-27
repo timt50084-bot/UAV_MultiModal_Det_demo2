@@ -163,6 +163,76 @@ def _mask_to_bounds(mask):
     return int(x_min), int(y_min), int(x_max), int(y_max)
 
 
+def _line_invalid_ratio(values, low_tol=10, high_tol=245, invalid_ratio=0.94):
+    values = np.asarray(values)
+    if values.ndim == 2:
+        near_black = (values <= low_tol).all(axis=1)
+        near_white = (values >= high_tol).all(axis=1)
+    else:
+        near_black = values <= low_tol
+        near_white = values >= high_tol
+
+    mean_value = float(values.mean())
+    std_value = float(values.std())
+    black_ratio = float(near_black.mean())
+    white_ratio = float(near_white.mean())
+
+    if black_ratio >= invalid_ratio or white_ratio >= invalid_ratio:
+        return True
+
+    # JPEG white borders are not always pure 255. Treat low-texture bright
+    # edge bands as invalid too so they can be trimmed consistently.
+    if mean_value >= high_tol - 12 and std_value <= 12.0:
+        return True
+    return False
+
+
+def _trim_single_image_edges(image, low_tol=10, high_tol=245):
+    height, width = image.shape[:2]
+
+    def row_invalid(index):
+        row = image[index].reshape(-1, image.shape[2]) if image.ndim == 3 else image[index]
+        return _line_invalid_ratio(row, low_tol=low_tol, high_tol=high_tol)
+
+    def col_invalid(index):
+        col = image[:, index].reshape(-1, image.shape[2]) if image.ndim == 3 else image[:, index]
+        return _line_invalid_ratio(col, low_tol=low_tol, high_tol=high_tol)
+
+    top = 0
+    while top < height - 1 and row_invalid(top):
+        top += 1
+
+    bottom = height - 1
+    while bottom > top and row_invalid(bottom):
+        bottom -= 1
+
+    left = 0
+    while left < width - 1 and col_invalid(left):
+        left += 1
+
+    right = width - 1
+    while right > left and col_invalid(right):
+        right -= 1
+
+    return left, top, right, bottom
+
+
+def _trim_border_edges(img_rgb, img_ir, low_tol=10, high_tol=245):
+    """Trim obvious white/black border bands from each modality, then align."""
+    rgb_left, rgb_top, rgb_right, rgb_bottom = _trim_single_image_edges(
+        img_rgb, low_tol=low_tol, high_tol=high_tol
+    )
+    ir_left, ir_top, ir_right, ir_bottom = _trim_single_image_edges(
+        img_ir, low_tol=low_tol, high_tol=high_tol
+    )
+    return (
+        max(rgb_left, ir_left),
+        max(rgb_top, ir_top),
+        min(rgb_right, ir_right),
+        min(rgb_bottom, ir_bottom),
+    )
+
+
 def _expand_bbox_by_xml(xml_path, current_bounds, image_width, image_height, padding):
     if xml_path is None:
         return current_bounds
@@ -204,6 +274,16 @@ def get_dm_sop_crop_bbox(
     bounds = _mask_to_bounds(mask_union)
     if bounds is None:
         return 0, 0, width - 1, height - 1
+
+    edge_bounds = _trim_border_edges(img_rgb, img_ir, low_tol=low_tol, high_tol=high_tol)
+    edge_x_min, edge_y_min, edge_x_max, edge_y_max = edge_bounds
+    x_min, y_min, x_max, y_max = bounds
+    bounds = (
+        max(int(x_min), int(edge_x_min)),
+        max(int(y_min), int(edge_y_min)),
+        min(int(x_max), int(edge_x_max)),
+        min(int(y_max), int(edge_y_max)),
+    )
 
     bounds = _expand_bbox_by_xml(xml_rgb, bounds, width, height, padding)
     bounds = _expand_bbox_by_xml(xml_ir, bounds, width, height, padding)

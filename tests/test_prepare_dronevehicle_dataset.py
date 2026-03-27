@@ -166,6 +166,48 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
         self.assertLessEqual(x_max, 111)
         self.assertLessEqual(y_max, 117)
 
+    def test_dark_scene_white_bands_are_trimmed(self):
+        rgb = np.full((160, 180, 3), 8, dtype=np.uint8)
+        ir = np.full((160, 180, 3), 9, dtype=np.uint8)
+        rgb[18:142, 12:168] = 12
+        ir[20:140, 14:166] = 13
+        rgb[0:10, :] = 255
+        rgb[150:160, :] = 255
+        ir[0:10, :] = 255
+        ir[150:160, :] = 255
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreaterEqual(y_min, 10)
+        self.assertLessEqual(y_max, 149)
+
+    def test_white_bands_in_single_modality_are_trimmed(self):
+        rgb = np.full((160, 180, 3), 18, dtype=np.uint8)
+        ir = np.full((160, 180, 3), 18, dtype=np.uint8)
+        rgb[0:12, :] = 248
+        rgb[148:160, :] = 248
+        rgb[:, 0:10] = 248
+        rgb[:, 170:180] = 248
+        rgb[18:142, 16:164] = 24
+        ir[16:144, 14:166] = 24
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreaterEqual(x_min, 10)
+        self.assertGreaterEqual(y_min, 12)
+        self.assertLessEqual(x_max, 169)
+        self.assertLessEqual(y_max, 147)
+
     def test_black_border_is_cropped(self):
         rgb = np.zeros((100, 100, 3), dtype=np.uint8)
         ir = np.zeros((100, 100, 3), dtype=np.uint8)
