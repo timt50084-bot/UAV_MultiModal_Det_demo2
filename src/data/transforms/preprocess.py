@@ -112,6 +112,22 @@ def _as_content_mask(image, low_tol=10, high_tol=245):
     return ~(near_black | near_white)
 
 
+def _find_stable_span(counts, min_pixels, window=3, min_hits=2):
+    valid = counts >= min_pixels
+    if not valid.any():
+        return None
+
+    kernel = np.ones(window, dtype=np.int32)
+    smoothed = np.convolve(valid.astype(np.int32), kernel, mode='same')
+    stable = smoothed >= min_hits
+    indices = np.where(stable)[0]
+    if indices.size == 0:
+        indices = np.where(valid)[0]
+    if indices.size == 0:
+        return None
+    return int(indices[0]), int(indices[-1])
+
+
 def _mask_to_bounds(mask):
     """Convert a noisy content mask to a stable bbox for border trimming."""
     mask_uint8 = mask.astype(np.uint8)
@@ -126,15 +142,15 @@ def _mask_to_bounds(mask):
         cleaned = mask_uint8
 
     height, width = cleaned.shape
-    min_row_pixels = max(3, int(round(width * 0.005)))
-    min_col_pixels = max(3, int(round(height * 0.005)))
+    min_row_pixels = max(5, int(round(width * 0.01)))
+    min_col_pixels = max(5, int(round(height * 0.01)))
 
     row_counts = cleaned.sum(axis=1)
     col_counts = cleaned.sum(axis=0)
-    valid_rows = np.where(row_counts >= min_row_pixels)[0]
-    valid_cols = np.where(col_counts >= min_col_pixels)[0]
+    row_span = _find_stable_span(row_counts, min_row_pixels)
+    col_span = _find_stable_span(col_counts, min_col_pixels)
 
-    if valid_rows.size == 0 or valid_cols.size == 0:
+    if row_span is None or col_span is None:
         coords = np.argwhere(cleaned > 0)
         if coords.shape[0] == 0:
             return None
@@ -142,7 +158,9 @@ def _mask_to_bounds(mask):
         y_max, x_max = coords.max(axis=0)
         return int(x_min), int(y_min), int(x_max), int(y_max)
 
-    return int(valid_cols[0]), int(valid_rows[0]), int(valid_cols[-1]), int(valid_rows[-1])
+    y_min, y_max = row_span
+    x_min, x_max = col_span
+    return int(x_min), int(y_min), int(x_max), int(y_max)
 
 
 def _expand_bbox_by_xml(xml_path, current_bounds, image_width, image_height, padding):

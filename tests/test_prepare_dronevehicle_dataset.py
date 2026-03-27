@@ -143,6 +143,29 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
         self.assertLessEqual(x_max, 101)
         self.assertLessEqual(y_max, 99)
 
+    def test_bottom_and_right_white_border_noise_is_ignored(self):
+        rgb = np.full((140, 140, 3), 255, dtype=np.uint8)
+        ir = np.full((140, 140, 3), 255, dtype=np.uint8)
+        rgb[12:118, 10:112] = 70
+        ir[14:116, 12:110] = 85
+
+        rgb[138, 20] = 100
+        rgb[139, 30] = 120
+        ir[40, 138] = 110
+        ir[60, 139] = 115
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreaterEqual(x_min, 10)
+        self.assertGreaterEqual(y_min, 12)
+        self.assertLessEqual(x_max, 111)
+        self.assertLessEqual(y_max, 117)
+
     def test_black_border_is_cropped(self):
         rgb = np.zeros((100, 100, 3), dtype=np.uint8)
         ir = np.zeros((100, 100, 3), dtype=np.uint8)
