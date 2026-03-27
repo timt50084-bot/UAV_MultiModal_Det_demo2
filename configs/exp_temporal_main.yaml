@@ -3,6 +3,9 @@ experiment:
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
+dataset:
+  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+
 model:
   fusion_att_type: 'SimpleConcatFusion'
   use_contrastive: False

@@ -3,6 +3,9 @@ experiment:
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
+dataset:
+  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+
 model:
   # Final mainline: use the explicit fusion block below as the single active fusion entry.
   # The legacy fusion_att_type route is intentionally disabled here to avoid ambiguity.
