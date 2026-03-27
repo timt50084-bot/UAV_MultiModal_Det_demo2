@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from src.data.datasets.drone_rgb_ir import DroneDualDataset
+from src.data.transforms.preprocess import get_dm_sop_crop_bbox
 from tools.prepare_dronevehicle_dataset import prepare_dataset
 
 
@@ -74,6 +75,72 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
             self.assertEqual(tuple(prev_rgb.shape), (3, 64, 64))
             self.assertEqual(tuple(prev_ir.shape), (3, 64, 64))
             self.assertEqual(labels.shape[1], 6)
+
+    def test_white_border_is_cropped(self):
+        rgb = np.full((100, 100, 3), 255, dtype=np.uint8)
+        ir = np.full((100, 100, 3), 255, dtype=np.uint8)
+        rgb[20:80, 20:80] = 120
+        ir[25:75, 25:75] = 130
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreater(x_min, 0)
+        self.assertGreater(y_min, 0)
+        self.assertLess(x_max, 99)
+        self.assertLess(y_max, 99)
+        self.assertLess((x_max - x_min + 1), 100)
+        self.assertLess((y_max - y_min + 1), 100)
+
+    def test_black_border_is_cropped(self):
+        rgb = np.zeros((100, 100, 3), dtype=np.uint8)
+        ir = np.zeros((100, 100, 3), dtype=np.uint8)
+        rgb[15:85, 10:90] = 120
+        ir[20:80, 12:88] = 140
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreater(x_min, 0)
+        self.assertGreater(y_min, 0)
+        self.assertLess(x_max, 99)
+        self.assertLess(y_max, 99)
+
+    def test_xml_padding_protects_targets(self):
+        rgb = np.full((100, 100, 3), 255, dtype=np.uint8)
+        ir = np.full((100, 100, 3), 255, dtype=np.uint8)
+        rgb[35:65, 35:65] = 100
+        ir[35:65, 35:65] = 110
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xml_path = Path(tmp_dir) / 'sample.xml'
+            self._write_sample_xml(xml_path, cx=18.0, cy=50.0, w=12.0, h=12.0, angle=0.0)
+            x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(rgb, ir, xml_path, xml_path)
+
+        self.assertLessEqual(x_min, 5)
+        self.assertGreaterEqual(x_max, 64)
+        self.assertGreaterEqual(y_max, 64)
+
+    def test_blank_image_falls_back_to_full_image(self):
+        rgb = np.full((80, 90, 3), 255, dtype=np.uint8)
+        ir = np.full((80, 90, 3), 255, dtype=np.uint8)
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertEqual((x_min, y_min, x_max, y_max), (0, 0, 89, 79))
 
 
 if __name__ == '__main__':

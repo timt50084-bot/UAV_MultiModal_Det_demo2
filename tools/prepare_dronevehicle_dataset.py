@@ -83,6 +83,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--ir-dir', type=str, default='', help='Optional explicit raw IR image directory.')
     parser.add_argument('--rgb-label-dir', type=str, default='', help='Optional explicit raw RGB XML directory.')
     parser.add_argument('--ir-label-dir', type=str, default='', help='Optional explicit raw IR XML directory.')
+    parser.add_argument('--low-tol', type=int, default=10, help='Near-black threshold for valid-content masking.')
+    parser.add_argument('--high-tol', type=int, default=245, help='Near-white threshold for valid-content masking.')
     parser.add_argument('--log-level', type=str, default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     return parser
 
@@ -227,6 +229,8 @@ def prepare_split(
     ir_dir: str = '',
     rgb_label_dir: str = '',
     ir_label_dir: str = '',
+    low_tol: int = 10,
+    high_tol: int = 245,
 ) -> Dict[str, object]:
     sources = _resolve_split_sources(
         raw_root=raw_root,
@@ -259,6 +263,7 @@ def prepare_split(
         'bad_image': 0,
         'empty_labels': 0,
         'warnings': 0,
+        'crop_fallbacks': 0,
     }
 
     logging.info('Preparing split `%s` from %s', split, raw_root)
@@ -288,30 +293,56 @@ def prepare_split(
         if rgb_xml_path == MISSING_XML_PATH or ir_xml_path == MISSING_XML_PATH:
             summary['warnings'] += 1
 
+        full_width = img_rgb.shape[1]
+        full_height = img_rgb.shape[0]
+        fallback = False
         try:
             x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
                 img_rgb,
                 img_ir,
                 rgb_xml_path,
                 ir_xml_path,
+                low_tol=low_tol,
+                high_tol=high_tol,
             )
         except ET.ParseError:
             logging.warning('Crop skipped due to bad XML for sample `%s`; using full image.', stem)
             summary['bad_xml'] += 1
             x_min, y_min = 0, 0
-            x_max, y_max = img_rgb.shape[1] - 1, img_rgb.shape[0] - 1
+            x_max, y_max = full_width - 1, full_height - 1
+            fallback = True
 
         x_min = max(0, int(x_min))
         y_min = max(0, int(y_min))
-        x_max = min(int(x_max), img_rgb.shape[1] - 1)
-        y_max = min(int(y_max), img_rgb.shape[0] - 1)
+        x_max = min(int(x_max), full_width - 1)
+        y_max = min(int(y_max), full_height - 1)
         if x_max <= x_min or y_max <= y_min:
             x_min, y_min = 0, 0
-            x_max, y_max = img_rgb.shape[1] - 1, img_rgb.shape[0] - 1
+            x_max, y_max = full_width - 1, full_height - 1
+            fallback = True
+
+        if x_min == 0 and y_min == 0 and x_max == full_width - 1 and y_max == full_height - 1:
+            fallback = True
+        if fallback:
+            summary['crop_fallbacks'] += 1
 
         cropped_rgb = img_rgb[y_min:y_max + 1, x_min:x_max + 1]
         cropped_ir = img_ir[y_min:y_max + 1, x_min:x_max + 1]
         crop_h, crop_w = cropped_rgb.shape[:2]
+
+        logging.info(
+            'Sample `%s`: original=%sx%s crop=(%s,%s,%s,%s) cropped=%sx%s fallback=%s',
+            stem,
+            full_width,
+            full_height,
+            x_min,
+            y_min,
+            x_max,
+            y_max,
+            crop_w,
+            crop_h,
+            fallback,
+        )
 
         rgb_lines = _safe_parse_xml(rgb_xml_path, x_min, y_min, crop_w, crop_h, summary)
         ir_lines = _safe_parse_xml(ir_xml_path, x_min, y_min, crop_w, crop_h, summary)
@@ -331,12 +362,13 @@ def prepare_split(
         summary['processed_pairs'] += 1
 
     logging.info(
-        'Finished split `%s`: processed=%s missing_ir=%s bad_xml=%s empty_labels=%s',
+        'Finished split `%s`: processed=%s missing_ir=%s bad_xml=%s empty_labels=%s crop_fallbacks=%s',
         split,
         summary['processed_pairs'],
         summary['missing_ir'],
         summary['bad_xml'],
         summary['empty_labels'],
+        summary['crop_fallbacks'],
     )
     return summary
 
@@ -350,6 +382,8 @@ def prepare_dataset(
     ir_dir: str = '',
     rgb_label_dir: str = '',
     ir_label_dir: str = '',
+    low_tol: int = 10,
+    high_tol: int = 245,
 ) -> Dict[str, object]:
     raw_root_path = Path(raw_root)
     output_root_path = Path(output_root)
@@ -364,6 +398,7 @@ def prepare_dataset(
         'total_warnings': 0,
         'total_bad_xml': 0,
         'total_empty_labels': 0,
+        'total_crop_fallbacks': 0,
     }
 
     for split in splits:
@@ -376,12 +411,15 @@ def prepare_dataset(
             ir_dir=ir_dir,
             rgb_label_dir=rgb_label_dir,
             ir_label_dir=ir_label_dir,
+            low_tol=low_tol,
+            high_tol=high_tol,
         )
         overall['splits'][split] = split_summary
         overall['total_processed_pairs'] += int(split_summary['processed_pairs'])
         overall['total_warnings'] += int(split_summary['warnings'])
         overall['total_bad_xml'] += int(split_summary['bad_xml'])
         overall['total_empty_labels'] += int(split_summary['empty_labels'])
+        overall['total_crop_fallbacks'] += int(split_summary['crop_fallbacks'])
 
     return overall
 
@@ -400,8 +438,10 @@ def main() -> None:
         ir_dir=args.ir_dir,
         rgb_label_dir=args.rgb_label_dir,
         ir_label_dir=args.ir_label_dir,
+        low_tol=args.low_tol,
+        high_tol=args.high_tol,
     )
-    logging.info('Dataset preparation summary:\n%s', json.dumps(summary, ensure_ascii=False, indent=2))
+    logging.info('Dataset preparation summary\n%s', json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
