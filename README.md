@@ -117,6 +117,61 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+## Dataset Preparation
+
+Raw DroneVehicle directory layout expected by the formal preparation script:
+
+```text
+D:/DataSet/DroneVehicle/
+  train/
+    training/
+    trainingr/
+    trainlabel/
+    trainlabelr/
+  val/
+    validation/
+    validationr/
+    vallabel/
+    vallabelr/
+```
+
+Directory meaning:
+
+- `training`: RGB images
+- `trainingr`: IR images
+- `trainlabel`: RGB XML labels
+- `trainlabelr`: IR XML labels
+- `validation` / `validationr` / `vallabel` / `vallabelr`: the corresponding validation split directories
+
+Processed output layout used by `DroneDualDataset`:
+
+```text
+D:/DataSet/DroneVehicle_Processed/
+  train/
+    images/
+      img/
+      imgr/
+    labels/
+      merged/
+  val/
+    images/
+      img/
+      imgr/
+    labels/
+      merged/
+```
+
+Preparation command:
+
+```bash
+python tools/prepare_dronevehicle_dataset.py --raw-root D:/DataSet/DroneVehicle --output-root D:/DataSet/DroneVehicle_Processed --splits train val
+```
+
+Training note:
+
+- The main training configs now explicitly bind `dataset.root_dir: 'D:/DataSet/DroneVehicle_Processed'`.
+- Run `tools/prepare_dronevehicle_dataset.py` first so training reads the processed dataset instead of the raw DroneVehicle folders.
+
 ## Runtime Naming Convention
 
 新推荐配置统一使用：

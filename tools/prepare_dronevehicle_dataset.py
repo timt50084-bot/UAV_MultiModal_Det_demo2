@@ -34,23 +34,23 @@ IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
 MISSING_XML_PATH = Path('__missing__.xml')
 
 RGB_DIR_CANDIDATES = {
-    'train': ['trainimg', 'img', 'rgb', 'visible', 'images'],
-    'val': ['valimg', 'img', 'rgb', 'visible', 'images'],
+    'train': ['training', 'trainimg', 'img', 'rgb', 'visible', 'images'],
+    'val': ['validation', 'training', 'valimg', 'img', 'rgb', 'visible', 'images'],
     'test': ['testimg', 'img', 'rgb', 'visible', 'images'],
 }
 IR_DIR_CANDIDATES = {
-    'train': ['trainimgr', 'imgr', 'ir', 'infrared', 'images_ir'],
-    'val': ['valimgr', 'imgr', 'ir', 'infrared', 'images_ir'],
+    'train': ['trainingr', 'trainimgr', 'imgr', 'ir', 'infrared', 'images_ir'],
+    'val': ['validationr', 'trainingr', 'valimgr', 'imgr', 'ir', 'infrared', 'images_ir'],
     'test': ['testimgr', 'imgr', 'ir', 'infrared', 'images_ir'],
 }
 RGB_LABEL_DIR_CANDIDATES = {
     'train': ['trainlabel', 'label', 'labels', 'labelrgb', 'labels_rgb'],
-    'val': ['vallabel', 'label', 'labels', 'labelrgb', 'labels_rgb'],
+    'val': ['vallabel', 'validationlabel', 'label', 'labels', 'labelrgb', 'labels_rgb'],
     'test': ['testlabel', 'label', 'labels', 'labelrgb', 'labels_rgb'],
 }
 IR_LABEL_DIR_CANDIDATES = {
     'train': ['trainlabelr', 'labelr', 'label_ir', 'labels_ir', 'labelsr'],
-    'val': ['vallabelr', 'labelr', 'label_ir', 'labels_ir', 'labelsr'],
+    'val': ['vallabelr', 'validationlabelr', 'labelr', 'label_ir', 'labels_ir', 'labelsr'],
     'test': ['testlabelr', 'labelr', 'label_ir', 'labels_ir', 'labelsr'],
 }
 
@@ -212,11 +212,21 @@ def _resolve_split_sources(
         raise FileNotFoundError(f'Could not resolve raw RGB directory for split `{split}` under {raw_root}')
     if ir_path is None:
         raise FileNotFoundError(f'Could not resolve raw IR directory for split `{split}` under {raw_root}')
+
+    same_image_dir = rgb_path.resolve() == ir_path.resolve()
+    if same_image_dir:
+        logging.warning(
+            'RGB and IR image directories resolved to the same path for split `%s`: %s',
+            split,
+            rgb_path,
+        )
+
     return {
         'rgb_dir': rgb_path,
         'ir_dir': ir_path,
         'rgb_label_dir': rgb_label_path,
         'ir_label_dir': ir_label_path,
+        'rgb_ir_same_dir': same_image_dir,
     }
 
 
@@ -253,6 +263,7 @@ def prepare_split(
         'ir_dir': '' if sources['ir_dir'] is None else str(sources['ir_dir']),
         'rgb_label_dir': '' if sources['rgb_label_dir'] is None else str(sources['rgb_label_dir']),
         'ir_label_dir': '' if sources['ir_label_dir'] is None else str(sources['ir_label_dir']),
+        'rgb_ir_same_dir': bool(sources.get('rgb_ir_same_dir', False)),
         'found_rgb_images': len(rgb_index),
         'found_ir_images': len(ir_index),
         'processed_pairs': 0,
@@ -271,6 +282,10 @@ def prepare_split(
     logging.info('  IR dir: %s', sources['ir_dir'])
     logging.info('  RGB label dir: %s', sources['rgb_label_dir'])
     logging.info('  IR label dir: %s', sources['ir_label_dir'])
+    logging.info('  RGB/IR same dir: %s', summary['rgb_ir_same_dir'])
+
+    if summary['rgb_ir_same_dir']:
+        summary['warnings'] += 1
 
     for stem, rgb_path in rgb_index.items():
         ir_path = ir_index.get(stem)

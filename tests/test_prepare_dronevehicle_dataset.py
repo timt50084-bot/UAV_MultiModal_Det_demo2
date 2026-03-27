@@ -142,6 +142,57 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
 
         self.assertEqual((x_min, y_min, x_max, y_max), (0, 0, 89, 79))
 
+    def test_prepare_dataset_supports_training_trainingr_layout(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            raw_root = tmp_root / 'raw'
+            out_root = tmp_root / 'processed'
+
+            (raw_root / 'train' / 'training').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainingr').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabel').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabelr').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'val' / 'validation').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'val' / 'validationr').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'val' / 'vallabel').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'val' / 'vallabelr').mkdir(parents=True, exist_ok=True)
+
+            train_rgb = np.full((64, 64, 3), 180, dtype=np.uint8)
+            train_ir = np.full((64, 64, 3), 120, dtype=np.uint8)
+            val_rgb = np.full((64, 64, 3), 170, dtype=np.uint8)
+            val_ir = np.full((64, 64, 3), 110, dtype=np.uint8)
+
+            cv2.imwrite(str(raw_root / 'train' / 'training' / 'sample.jpg'), train_rgb)
+            cv2.imwrite(str(raw_root / 'train' / 'trainingr' / 'sample.jpg'), train_ir)
+            cv2.imwrite(str(raw_root / 'val' / 'validation' / 'sample.jpg'), val_rgb)
+            cv2.imwrite(str(raw_root / 'val' / 'validationr' / 'sample.jpg'), val_ir)
+
+            self._write_sample_xml(raw_root / 'train' / 'trainlabel' / 'sample.xml')
+            self._write_sample_xml(raw_root / 'train' / 'trainlabelr' / 'sample.xml', angle=0.12)
+            self._write_sample_xml(raw_root / 'val' / 'vallabel' / 'sample.xml')
+            self._write_sample_xml(raw_root / 'val' / 'vallabelr' / 'sample.xml', angle=0.12)
+
+            summary = prepare_dataset(
+                raw_root=str(raw_root),
+                output_root=str(out_root),
+                splits=['train', 'val'],
+                overwrite=False,
+            )
+
+            self.assertEqual(summary['splits']['train']['rgb_dir'], str(raw_root / 'train' / 'training'))
+            self.assertEqual(summary['splits']['train']['ir_dir'], str(raw_root / 'train' / 'trainingr'))
+            self.assertFalse(summary['splits']['train']['rgb_ir_same_dir'])
+            self.assertEqual(summary['splits']['val']['rgb_dir'], str(raw_root / 'val' / 'validation'))
+            self.assertEqual(summary['splits']['val']['ir_dir'], str(raw_root / 'val' / 'validationr'))
+            self.assertFalse(summary['splits']['val']['rgb_ir_same_dir'])
+            self.assertEqual(summary['splits']['train']['empty_labels'], 0)
+            self.assertEqual(summary['splits']['val']['empty_labels'], 0)
+
+            train_label = (out_root / 'train' / 'labels' / 'merged' / 'sample.txt').read_text(encoding='utf-8').strip()
+            val_label = (out_root / 'val' / 'labels' / 'merged' / 'sample.txt').read_text(encoding='utf-8').strip()
+            self.assertTrue(train_label)
+            self.assertTrue(val_label)
+
 
 if __name__ == '__main__':
     unittest.main()
