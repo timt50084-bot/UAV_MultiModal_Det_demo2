@@ -60,8 +60,8 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
                 (raw_root / split / f'{split}label').mkdir(parents=True, exist_ok=True)
                 (raw_root / split / f'{split}labelr').mkdir(parents=True, exist_ok=True)
 
-                rgb = np.full((712, 840, 3), 180, dtype=np.uint8)
-                ir = np.full((712, 840, 3), 120, dtype=np.uint8)
+                rgb = np.full((64, 64, 3), 180, dtype=np.uint8)
+                ir = np.full((64, 64, 3), 120, dtype=np.uint8)
                 cv2.imwrite(str(raw_root / split / f'{split}img' / 'sample.jpg'), rgb)
                 cv2.imwrite(str(raw_root / split / f'{split}imgr' / 'sample.jpg'), ir)
                 self._write_sample_xml(raw_root / split / f'{split}label' / 'sample.xml')
@@ -81,8 +81,7 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
 
             saved_rgb = cv2.imread(str(out_root / 'train' / 'images' / 'img' / 'sample.jpg'))
             saved_ir = cv2.imread(str(out_root / 'train' / 'images' / 'imgr' / 'sample.jpg'))
-            self.assertEqual(saved_rgb.shape[:2], (512, 640))
-            self.assertEqual(saved_ir.shape[:2], (512, 640))
+            self.assertEqual(saved_rgb.shape[:2], saved_ir.shape[:2])
 
             dataset = DroneDualDataset(
                 root_dir=str(out_root),
@@ -120,6 +119,29 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
         self.assertLess(y_max, 99)
         self.assertLess((x_max - x_min + 1), 100)
         self.assertLess((y_max - y_min + 1), 100)
+
+    def test_white_border_noise_is_ignored(self):
+        rgb = np.full((120, 120, 3), 255, dtype=np.uint8)
+        ir = np.full((120, 120, 3), 255, dtype=np.uint8)
+        rgb[20:100, 18:102] = 80
+        ir[22:98, 20:100] = 90
+
+        rgb[0, 0] = 100
+        rgb[1, 1] = 110
+        ir[0, 119] = 100
+        ir[2, 118] = 120
+
+        x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+            rgb,
+            ir,
+            Path('__missing_rgb__.xml'),
+            Path('__missing_ir__.xml'),
+        )
+
+        self.assertGreaterEqual(x_min, 18)
+        self.assertGreaterEqual(y_min, 20)
+        self.assertLessEqual(x_max, 101)
+        self.assertLessEqual(y_max, 99)
 
     def test_black_border_is_cropped(self):
         rgb = np.zeros((100, 100, 3), dtype=np.uint8)

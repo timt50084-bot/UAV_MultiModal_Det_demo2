@@ -112,6 +112,39 @@ def _as_content_mask(image, low_tol=10, high_tol=245):
     return ~(near_black | near_white)
 
 
+def _mask_to_bounds(mask):
+    """Convert a noisy content mask to a stable bbox for border trimming."""
+    mask_uint8 = mask.astype(np.uint8)
+    if mask_uint8.sum() == 0:
+        return None
+
+    # Remove tiny isolated speckles so a few noisy pixels do not pin the crop
+    # to the image border and leave residual white margins.
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+    if cleaned.sum() == 0:
+        cleaned = mask_uint8
+
+    height, width = cleaned.shape
+    min_row_pixels = max(3, int(round(width * 0.005)))
+    min_col_pixels = max(3, int(round(height * 0.005)))
+
+    row_counts = cleaned.sum(axis=1)
+    col_counts = cleaned.sum(axis=0)
+    valid_rows = np.where(row_counts >= min_row_pixels)[0]
+    valid_cols = np.where(col_counts >= min_col_pixels)[0]
+
+    if valid_rows.size == 0 or valid_cols.size == 0:
+        coords = np.argwhere(cleaned > 0)
+        if coords.shape[0] == 0:
+            return None
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        return int(x_min), int(y_min), int(x_max), int(y_max)
+
+    return int(valid_cols[0]), int(valid_rows[0]), int(valid_cols[-1]), int(valid_rows[-1])
+
+
 def _expand_bbox_by_xml(xml_path, current_bounds, image_width, image_height, padding):
     if xml_path is None:
         return current_bounds
@@ -150,14 +183,10 @@ def get_dm_sop_crop_bbox(
     mask_ir = _as_content_mask(img_ir, low_tol=low_tol, high_tol=high_tol)
     mask_union = mask_rgb | mask_ir
 
-    coords = np.argwhere(mask_union)
-    if coords.shape[0] == 0:
+    bounds = _mask_to_bounds(mask_union)
+    if bounds is None:
         return 0, 0, width - 1, height - 1
 
-    y_min, x_min = coords.min(axis=0)
-    y_max, x_max = coords.max(axis=0)
-
-    bounds = (int(x_min), int(y_min), int(x_max), int(y_max))
     bounds = _expand_bbox_by_xml(xml_rgb, bounds, width, height, padding)
     bounds = _expand_bbox_by_xml(xml_ir, bounds, width, height, padding)
 
