@@ -14,7 +14,8 @@ experiment:
 
 dataset:
   type: 'DroneDualDataset'
-  root_dir: 'data/drone_rgb_ir'
+  raw_root: 'D:/DataSet/DroneVehicle'
+  root_dir: 'D:/DataSet/DroneVehicle_Processed'
   split: 'train'
   imgsz: 1024
   class_names: ['car', 'truck', 'bus', 'van', 'freight_car']

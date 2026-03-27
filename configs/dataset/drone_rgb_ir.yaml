@@ -1,15 +1,13 @@
-# 数据集路径与超参
-# configs/dataset/drone_rgb_ir.yaml
-# DroneVehicle 数据集独立配置 (会覆盖 default.yaml 中的 dataset 节点)
+# Dataset-only override for the processed DroneVehicle training layout.
+# This file is intended to stay aligned with configs/default.yaml.
 
 dataset:
   type: 'DroneDualDataset'
+  raw_root: 'D:/DataSet/DroneVehicle'
   root_dir: 'D:/DataSet/DroneVehicle_Processed'
   split: 'train'
   imgsz: 1024
   class_names: ['car', 'truck', 'bus', 'van', 'freight_car']
-
-  # 数据增强可以单独在这里微调
   aug_cfg:
     enable_cmcp: True
     enable_mrre: True
