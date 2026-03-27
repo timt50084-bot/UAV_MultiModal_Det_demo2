@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 from src.data.datasets.drone_rgb_ir import DroneDualDataset
-from src.data.transforms.preprocess import get_dm_sop_crop_bbox
+from src.data.transforms.preprocess import get_dm_sop_crop_bbox, parse_xml_to_yolo_obb
 from tools.prepare_dronevehicle_dataset import prepare_dataset
 
 
@@ -28,6 +28,26 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
 """.strip()
         path.write_text(xml, encoding='utf-8')
 
+    def _write_polygon_xml(self, path: Path, class_name='car'):
+        xml = f"""
+<annotation>
+  <object>
+    <name>{class_name}</name>
+    <polygon>
+      <x1>20</x1>
+      <y1>20</y1>
+      <x2>40</x2>
+      <y2>20</y2>
+      <x3>40</x3>
+      <y3>50</y3>
+      <x4>20</x4>
+      <y4>50</y4>
+    </polygon>
+  </object>
+</annotation>
+""".strip()
+        path.write_text(xml, encoding='utf-8')
+
     def test_prepare_dataset_outputs_drone_dual_layout(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
@@ -40,8 +60,8 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
                 (raw_root / split / f'{split}label').mkdir(parents=True, exist_ok=True)
                 (raw_root / split / f'{split}labelr').mkdir(parents=True, exist_ok=True)
 
-                rgb = np.full((64, 64, 3), 180, dtype=np.uint8)
-                ir = np.full((64, 64, 3), 120, dtype=np.uint8)
+                rgb = np.full((712, 840, 3), 180, dtype=np.uint8)
+                ir = np.full((712, 840, 3), 120, dtype=np.uint8)
                 cv2.imwrite(str(raw_root / split / f'{split}img' / 'sample.jpg'), rgb)
                 cv2.imwrite(str(raw_root / split / f'{split}imgr' / 'sample.jpg'), ir)
                 self._write_sample_xml(raw_root / split / f'{split}label' / 'sample.xml')
@@ -58,6 +78,11 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
             self.assertTrue((out_root / 'train' / 'images' / 'img' / 'sample.jpg').exists())
             self.assertTrue((out_root / 'train' / 'images' / 'imgr' / 'sample.jpg').exists())
             self.assertTrue((out_root / 'train' / 'labels' / 'merged' / 'sample.txt').exists())
+
+            saved_rgb = cv2.imread(str(out_root / 'train' / 'images' / 'img' / 'sample.jpg'))
+            saved_ir = cv2.imread(str(out_root / 'train' / 'images' / 'imgr' / 'sample.jpg'))
+            self.assertEqual(saved_rgb.shape[:2], (512, 640))
+            self.assertEqual(saved_ir.shape[:2], (512, 640))
 
             dataset = DroneDualDataset(
                 root_dir=str(out_root),
@@ -193,6 +218,20 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
             self.assertTrue(train_label)
             self.assertTrue(val_label)
 
+    def test_polygon_xml_is_converted_to_yolo_obb(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xml_path = Path(tmp_dir) / 'polygon.xml'
+            self._write_polygon_xml(xml_path)
+            lines = parse_xml_to_yolo_obb(xml_path)
 
-if __name__ == '__main__':
-    unittest.main()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith('0 '))
+
+    def test_polygon_class_alias_is_supported(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xml_path = Path(tmp_dir) / 'polygon_alias.xml'
+            self._write_polygon_xml(xml_path, class_name='feright car')
+            lines = parse_xml_to_yolo_obb(xml_path)
+
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith('4 '))

@@ -25,6 +25,7 @@ if __package__ in {None, ''}:
 
 from src.data.transforms.preprocess import (  # noqa: E402
     cmlc_nms_fusion,
+    fit_crop_bbox_to_target_size,
     get_dm_sop_crop_bbox,
     parse_xml_to_yolo_obb,
 )
@@ -32,6 +33,8 @@ from src.data.transforms.preprocess import (  # noqa: E402
 
 IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
 MISSING_XML_PATH = Path('__missing__.xml')
+TARGET_CROP_WIDTH = 640
+TARGET_CROP_HEIGHT = 512
 
 RGB_DIR_CANDIDATES = {
     'train': ['training', 'trainimg', 'img', 'rgb', 'visible', 'images'],
@@ -166,6 +169,23 @@ def _safe_parse_xml(
         logging.warning('Bad XML during parse skipped: %s', xml_path)
         summary['bad_xml'] += 1
         return []
+
+
+def _pad_to_target_size(image, target_width=TARGET_CROP_WIDTH, target_height=TARGET_CROP_HEIGHT):
+    height, width = image.shape[:2]
+    pad_right = max(0, int(target_width) - int(width))
+    pad_bottom = max(0, int(target_height) - int(height))
+    if pad_right == 0 and pad_bottom == 0:
+        return image
+    return cv2.copyMakeBorder(
+        image,
+        0,
+        pad_bottom,
+        0,
+        pad_right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=(0, 0, 0),
+    )
 
 
 def _prepare_output_dirs(output_root: Path, split: str, overwrite: bool = False) -> Dict[str, Path]:
@@ -336,6 +356,17 @@ def prepare_split(
             x_max, y_max = full_width - 1, full_height - 1
             fallback = True
 
+        x_min, y_min, x_max, y_max = fit_crop_bbox_to_target_size(
+            x_min,
+            y_min,
+            x_max,
+            y_max,
+            image_width=full_width,
+            image_height=full_height,
+            target_width=TARGET_CROP_WIDTH,
+            target_height=TARGET_CROP_HEIGHT,
+        )
+
         if x_min == 0 and y_min == 0 and x_max == full_width - 1 and y_max == full_height - 1:
             fallback = True
         if fallback:
@@ -343,6 +374,8 @@ def prepare_split(
 
         cropped_rgb = img_rgb[y_min:y_max + 1, x_min:x_max + 1]
         cropped_ir = img_ir[y_min:y_max + 1, x_min:x_max + 1]
+        cropped_rgb = _pad_to_target_size(cropped_rgb)
+        cropped_ir = _pad_to_target_size(cropped_ir)
         crop_h, crop_w = cropped_rgb.shape[:2]
 
         logging.info(

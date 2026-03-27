@@ -7,11 +7,22 @@ augmentation belongs in `augmentations.py` and should not be added here.
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import cv2
 import numpy as np
 from shapely.geometry import Polygon
 
 
 CLASS_MAP = {'car': 0, 'truck': 1, 'bus': 2, 'van': 3, 'freight_car': 4}
+CLASS_NAME_ALIASES = {
+    'car': 'car',
+    'truck': 'truck',
+    'bus': 'bus',
+    'van': 'van',
+    'freight_car': 'freight_car',
+    'freight car': 'freight_car',
+    'feright car': 'freight_car',
+    'feright_car': 'freight_car',
+}
 
 
 def obb_to_polygon(cx, cy, w, h, theta):
@@ -22,14 +33,75 @@ def obb_to_polygon(cx, cy, w, h, theta):
     return Polygon(np.dot(pts, rotation.T) + np.array([cx, cy], dtype=np.float32))
 
 
-def _as_content_mask(image, low_tol=10, high_tol=245):
-    """Return a mask that excludes both near-black and near-white background.
+def _normalize_class_name(name):
+    if not name:
+        return None
+    canonical = str(name).strip().lower().replace('-', ' ').replace('_', ' ')
+    canonical = ' '.join(canonical.split())
+    if canonical in CLASS_NAME_ALIASES:
+        return CLASS_NAME_ALIASES[canonical]
+    return CLASS_NAME_ALIASES.get(canonical.replace(' ', '_'))
 
-    Stage goal here is practical dataset cleanup rather than semantic image
-    segmentation. We treat pixels as valid content only when they are neither
-    near-black nor near-white, which fixes the previous white-border miss while
-    keeping black-border trimming behavior.
-    """
+
+def _parse_polygon_points(obj):
+    polygon = obj.find('polygon')
+    if polygon is None:
+        return None
+
+    points = []
+    for index in range(1, 5):
+        x_text = polygon.findtext(f'x{index}')
+        y_text = polygon.findtext(f'y{index}')
+        if x_text is None or y_text is None:
+            return None
+        points.append([float(x_text), float(y_text)])
+    return np.asarray(points, dtype=np.float32)
+
+
+def _extract_object_obb(obj):
+    robndbox = obj.find('robndbox')
+    if robndbox is not None:
+        cx = float(robndbox.find('cx').text)
+        cy = float(robndbox.find('cy').text)
+        w = float(robndbox.find('w').text)
+        h = float(robndbox.find('h').text)
+        theta = float(robndbox.find('angle').text)
+    else:
+        points = _parse_polygon_points(obj)
+        if points is None or len(points) < 4:
+            return None
+        (cx, cy), (w, h), angle_deg = cv2.minAreaRect(points)
+        theta = np.deg2rad(angle_deg)
+        if h > w:
+            w, h = h, w
+            theta += np.pi / 2
+
+    while theta >= np.pi / 2:
+        theta -= np.pi
+    while theta < -np.pi / 2:
+        theta += np.pi
+    return float(cx), float(cy), float(w), float(h), float(theta)
+
+
+def _extract_object_bounds(obj):
+    points = _parse_polygon_points(obj)
+    if points is not None:
+        return (
+            float(points[:, 0].min()),
+            float(points[:, 1].min()),
+            float(points[:, 0].max()),
+            float(points[:, 1].max()),
+        )
+
+    obb = _extract_object_obb(obj)
+    if obb is None:
+        return None
+    cx, cy, w, h, _ = obb
+    return cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
+
+
+def _as_content_mask(image, low_tol=10, high_tol=245):
+    """Return a mask that excludes both near-black and near-white background."""
     array = np.asarray(image)
     if array.ndim == 3:
         near_black = (array <= low_tol).all(axis=2)
@@ -50,17 +122,14 @@ def _expand_bbox_by_xml(xml_path, current_bounds, image_width, image_height, pad
     x_min, y_min, x_max, y_max = current_bounds
     tree = ET.parse(xml_path)
     for obj in tree.getroot().findall('object'):
-        robndbox = obj.find('robndbox')
-        if robndbox is None:
+        bounds = _extract_object_bounds(obj)
+        if bounds is None:
             continue
-        cx = float(robndbox.find('cx').text)
-        cy = float(robndbox.find('cy').text)
-        w = float(robndbox.find('w').text)
-        h = float(robndbox.find('h').text)
-        x_min = min(x_min, max(0.0, cx - w / 2 - padding))
-        y_min = min(y_min, max(0.0, cy - h / 2 - padding))
-        x_max = max(x_max, min(image_width - 1.0, cx + w / 2 + padding))
-        y_max = max(y_max, min(image_height - 1.0, cy + h / 2 + padding))
+        obj_x_min, obj_y_min, obj_x_max, obj_y_max = bounds
+        x_min = min(x_min, max(0.0, obj_x_min - padding))
+        y_min = min(y_min, max(0.0, obj_y_min - padding))
+        x_max = max(x_max, min(image_width - 1.0, obj_x_max + padding))
+        y_max = max(y_max, min(image_height - 1.0, obj_y_max + padding))
 
     return int(np.floor(x_min)), int(np.floor(y_min)), int(np.ceil(x_max)), int(np.ceil(y_max))
 
@@ -74,12 +143,7 @@ def get_dm_sop_crop_bbox(
     high_tol=245,
     padding=20,
 ):
-    """Compute a joint RGB/IR crop bbox that removes white and black borders.
-
-    The crop is driven by the union of valid-content masks from RGB and IR,
-    then safely expanded with XML annotations so targets are not trimmed away.
-    Empty or abnormal images gracefully fall back to the full image extent.
-    """
+    """Compute a joint RGB/IR crop bbox that removes white and black borders."""
     height, width = img_rgb.shape[:2]
 
     mask_rgb = _as_content_mask(img_rgb, low_tol=low_tol, high_tol=high_tol)
@@ -106,6 +170,36 @@ def get_dm_sop_crop_bbox(
     if x_max <= x_min or y_max <= y_min:
         return 0, 0, width - 1, height - 1
     return x_min, y_min, x_max, y_max
+
+
+def fit_crop_bbox_to_target_size(
+    x_min,
+    y_min,
+    x_max,
+    y_max,
+    image_width,
+    image_height,
+    target_width=640,
+    target_height=512,
+):
+    """Fit a crop bbox to a fixed output size while staying inside the image."""
+    crop_width = min(int(target_width), int(image_width))
+    crop_height = min(int(target_height), int(image_height))
+
+    center_x = (float(x_min) + float(x_max)) / 2.0
+    center_y = (float(y_min) + float(y_max)) / 2.0
+
+    left = int(round(center_x - crop_width / 2.0))
+    top = int(round(center_y - crop_height / 2.0))
+
+    max_left = max(0, int(image_width) - crop_width)
+    max_top = max(0, int(image_height) - crop_height)
+    left = min(max(left, 0), max_left)
+    top = min(max(top, 0), max_top)
+
+    right = left + crop_width - 1
+    bottom = top + crop_height - 1
+    return left, top, right, bottom
 
 
 def cmlc_nms_fusion(yolo_lines_rgb, yolo_lines_ir, iou_thresh=0.4):
@@ -169,19 +263,16 @@ def parse_xml_to_yolo_obb(xml_path, x_offset=0, y_offset=0, crop_w=None, crop_h=
     tree = ET.parse(xml_path)
     yolo_lines = []
     for obj in tree.getroot().findall('object'):
-        cls = obj.find('name').text.lower()
-        if cls not in CLASS_MAP:
+        cls_name = _normalize_class_name(obj.findtext('name'))
+        if cls_name not in CLASS_MAP:
             continue
 
-        robndbox = obj.find('robndbox')
-        if robndbox is None:
+        obb = _extract_object_obb(obj)
+        if obb is None:
             continue
-
-        cx = float(robndbox.find('cx').text) - x_offset
-        cy = float(robndbox.find('cy').text) - y_offset
-        w = float(robndbox.find('w').text)
-        h = float(robndbox.find('h').text)
-        angle = float(robndbox.find('angle').text)
+        cx, cy, w, h, angle = obb
+        cx -= x_offset
+        cy -= y_offset
 
         if crop_w and crop_h:
             cx = cx / crop_w
@@ -189,10 +280,5 @@ def parse_xml_to_yolo_obb(xml_path, x_offset=0, y_offset=0, crop_w=None, crop_h=
             w = w / crop_w
             h = h / crop_h
 
-        while angle >= np.pi / 2:
-            angle -= np.pi
-        while angle < -np.pi / 2:
-            angle += np.pi
-
-        yolo_lines.append(f"{CLASS_MAP[cls]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} {angle:.6f}")
+        yolo_lines.append(f"{CLASS_MAP[cls_name]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} {angle:.6f}")
     return yolo_lines
