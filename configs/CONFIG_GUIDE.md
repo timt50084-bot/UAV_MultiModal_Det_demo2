@@ -4,7 +4,8 @@
 
 - Base defaults live in `configs/default.yaml`.
 - The only recommended day-to-day full-project training entry is `configs/main/full_project.yaml`.
-- `configs/exp_full_project.yaml` is now only a backward-compatible wrapper.
+- For tracking day-to-day work, use the files under `configs/main/` as well.
+- Old `configs/exp_*.yaml` command lines are still accepted through loader redirects.
 
 ## Where to edit common training params
 
@@ -29,30 +30,25 @@ Most common speed / schedule tuning is intentionally concentrated near the top o
 - `configs/default.yaml`
   Base defaults shared across training, validation, inference, and tracking.
 - `configs/main/`
-  Main training entry points.
+  Main active entry points.
   `full_project.yaml` is the recommended detector training config.
-- `configs/ablation/`
-  Detector-side ablations and historical experiment configs such as baseline, fusion, assigner, and temporal variants.
-- `configs/tracking/`
-  Tracking-specific experiment configs such as base, temporal, modality, jointlite, and final.
-- `configs/eval/`
-  Evaluation-only configs such as full eval, error analysis, and task metrics.
-- `configs/infer/`
-  Inference-only configs such as competition inference.
+  `tracking_base.yaml`, `tracking_temporal.yaml`, `tracking_modality.yaml`, `tracking_jointlite.yaml`, `tracking_final.yaml`, and `tracking_eval.yaml` are the active tracking-side configs.
+- `configs/archive/`
+  Historical detector / eval / infer configs kept only for backward compatibility and reference.
 - `configs/dataset/`, `configs/model/`
   Reusable config fragments and references. These are usually not edited for daily runs.
 
 ## Backward compatibility
 
 - Older root-level paths such as `configs/exp_baseline.yaml` and `configs/exp_tracking_final.yaml` still work.
-- The loader redirects those old paths to the new categorized files and prints a warning.
+- The loader redirects those old paths to the new `configs/main/` or `configs/archive/` locations and prints a warning.
 - Legacy top-level fields like `batch_size`, `num_workers`, and `use_log_sampler` are still accepted, but startup warns and maps them into `dataloader.*`.
 
 ## What not to edit for daily training
 
-- Do not use files under `configs/ablation/` for normal full-project runs unless you are intentionally running an ablation.
+- Do not use files under `configs/archive/` for normal day-to-day runs unless you are intentionally reproducing an old experiment.
 - Do not edit files under `configs/dataset/` or `configs/model/` for routine hyperparameter changes.
-- Do not edit `configs/exp_full_project.yaml` for daily work. It forwards to `configs/main/full_project.yaml`.
+- Do not chase older `configs/exp_*.yaml` paths for daily work. Edit the corresponding file under `configs/main/`.
 
 ## Common examples
 
@@ -71,12 +67,13 @@ If you want to change batch size, workers, image size, and epochs for a normal f
 
 ## Tracking entry points
 
-Use files under `configs/tracking/`:
+Use files under `configs/main/`:
 
-- `configs/tracking/base.yaml`
-- `configs/tracking/temporal.yaml`
-- `configs/tracking/modality.yaml`
-- `configs/tracking/jointlite.yaml`
-- `configs/tracking/final.yaml`
+- `configs/main/tracking_base.yaml`
+- `configs/main/tracking_temporal.yaml`
+- `configs/main/tracking_modality.yaml`
+- `configs/main/tracking_jointlite.yaml`
+- `configs/main/tracking_final.yaml`
+- `configs/main/tracking_eval.yaml`
 
 For backward compatibility, the old `configs/exp_tracking_*.yaml` command lines still resolve to these files.

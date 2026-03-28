@@ -1,6 +1,0 @@
-base_configs:
-  - main/full_project.yaml
-
-config_meta:
-  deprecated_message: "configs/exp_full_project.yaml is a compatibility wrapper. Edit configs/main/full_project.yaml for day-to-day full-project training."
-  recommended_edit_path: "configs/main/full_project.yaml"
