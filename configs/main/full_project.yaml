@@ -6,7 +6,7 @@ experiment:
 # Daily full-project training entry.
 # Most day-to-day training changes should happen in the block below.
 dataloader:
-  batch_size: 4
+  batch_size: 8
   num_workers: 8
   use_log_sampler: True
   pin_memory: True
