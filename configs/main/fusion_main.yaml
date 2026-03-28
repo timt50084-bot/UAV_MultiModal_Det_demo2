@@ -1,0 +1,23 @@
+base_configs:
+  - full_project.yaml
+
+experiment:
+  name: 'fusion_main'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+model:
+  use_contrastive: False
+  temporal:
+    enabled: False
+    mode: 'off'
+
+assigner:
+  lambda_theta: 0.0
+  tiny_area_threshold: 0.0
+  tiny_topk_boost: 0
+  elongated_ratio_threshold: 1000000000.0
+  use_angle_aware_assign: False
+
+loss:
+  temporal_weight: 0.0

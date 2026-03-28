@@ -24,6 +24,7 @@ Edit these in `configs/main/full_project.yaml`:
 - `performance.dataloader.prefetch_factor`
 
 Most common speed / schedule tuning is intentionally concentrated near the top of that file.
+The detector ablation files under `configs/main/` inherit these common settings, so you usually do not need to repeat batch size, image size, or epoch changes in multiple places.
 
 ## Directory layout
 
@@ -32,6 +33,7 @@ Most common speed / schedule tuning is intentionally concentrated near the top o
 - `configs/main/`
   Main active entry points.
   `full_project.yaml` is the recommended detector training config.
+  `baseline.yaml`, `fusion_main.yaml`, `assigner_main.yaml`, and `temporal_main.yaml` are the detector ablation entry points.
   `tracking_base.yaml`, `tracking_temporal.yaml`, `tracking_modality.yaml`, `tracking_jointlite.yaml`, `tracking_final.yaml`, and `tracking_eval.yaml` are the active tracking-side configs.
 - `configs/archive/`
   Historical detector / eval / infer configs kept only for backward compatibility and reference.
@@ -64,6 +66,27 @@ If you want to change batch size, workers, image size, and epochs for a normal f
 4. Confirm the printed effective config summary and inspect:
 
 `outputs/experiments/<run_name>/resolved_config.yaml`
+
+## Detector ablation entry points
+
+Use files under `configs/main/`:
+
+- `configs/main/baseline.yaml`
+  Baseline detector with fusion / temporal / tiny-angle-aware assigner enhancements disabled.
+- `configs/main/fusion_main.yaml`
+  Reliability-aware fusion enabled, temporal and assigner enhancements disabled.
+- `configs/main/assigner_main.yaml`
+  Tiny-angle-aware assigner enabled, fusion and temporal enhancements disabled.
+- `configs/main/temporal_main.yaml`
+  Temporal memory enabled, fusion and assigner enhancements disabled.
+- `configs/main/full_project.yaml`
+  Final detector mainline with fusion + temporal + assigner enhancements all enabled.
+
+Recommended workflow:
+
+1. Change common training hyperparameters only in `configs/main/full_project.yaml`.
+2. For a comparison run, switch the `--config` path to the corresponding file under `configs/main/`.
+3. Keep the ablation wrapper focused on feature on/off choices, not on duplicated schedule settings.
 
 ## Tracking entry points
 

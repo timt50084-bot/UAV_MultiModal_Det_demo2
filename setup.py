@@ -23,6 +23,20 @@ def discover_packages():
     return packages
 
 
+def load_requirements(path: str = 'requirements.txt'):
+    req_path = ROOT / path
+    requirements = []
+    if not req_path.exists():
+        return requirements
+
+    for line in req_path.read_text(encoding='utf-8').splitlines():
+        item = line.strip()
+        if not item or item.startswith('#'):
+            continue
+        requirements.append(item)
+    return requirements
+
+
 setup(
     name='uav-multimodal-obb-det',
     version='0.1.0',
@@ -32,14 +46,12 @@ setup(
     packages=discover_packages(),
     include_package_data=True,
     python_requires='>=3.8',
-    install_requires=[
-        'torch>=1.13',
-        'torchvision>=0.14',
-        'numpy>=1.21',
-        'opencv-python>=4.5',
-        'omegaconf>=2.3',
-        'PyYAML>=6.0',
-        'tqdm>=4.64',
-        'shapely>=1.8',
-    ],
+    install_requires=load_requirements(),
+    extras_require={
+        'export': [
+            'onnx>=1.15,<2.0',
+            'onnxsim>=0.4.33,<1.0',
+            'onnxruntime>=1.17,<2.0',
+        ],
+    },
 )

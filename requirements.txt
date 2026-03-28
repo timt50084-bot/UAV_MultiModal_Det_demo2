@@ -1,15 +1,17 @@
 # Core runtime dependencies
-torch>=1.13
-torchvision>=0.14
-numpy>=1.21
-opencv-python>=4.5
-omegaconf>=2.3
-PyYAML>=6.0
-tqdm>=4.64
-shapely>=1.8
+# These ranges are intentionally conservative so a fresh install on another
+# machine is less likely to drift onto an untested major version.
+torch>=2.2,<2.4
+torchvision>=0.17,<0.19
+numpy>=1.23,<2.0
+opencv-python>=4.8,<5.0
+omegaconf>=2.3,<3.0
+PyYAML>=6.0,<7.0
+tqdm>=4.66,<5.0
+shapely>=2.0,<3.0
 
 # Optional: model export
 # Install these only if you need tools/export.py
-# onnx>=1.13
-# onnxsim>=0.4.30
-# onnxruntime>=1.14
+# onnx>=1.15,<2.0
+# onnxsim>=0.4.33,<1.0
+# onnxruntime>=1.17,<2.0

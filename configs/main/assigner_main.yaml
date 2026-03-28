@@ -1,0 +1,18 @@
+base_configs:
+  - full_project.yaml
+
+experiment:
+  name: 'assigner_main'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+model:
+  fusion_att_type: 'SimpleConcatFusion'
+  fusion: null
+  use_contrastive: False
+  temporal:
+    enabled: False
+    mode: 'off'
+
+loss:
+  temporal_weight: 0.0

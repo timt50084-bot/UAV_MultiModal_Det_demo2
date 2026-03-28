@@ -1,0 +1,25 @@
+base_configs:
+  - full_project.yaml
+
+experiment:
+  name: 'temporal_main'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+model:
+  fusion_att_type: 'SimpleConcatFusion'
+  fusion: null
+  use_contrastive: False
+  temporal:
+    enabled: True
+    mode: 'memory'
+    memory_len: 3
+    aggregator: 'weighted_avg'
+    gate_hidden_ratio: 0.25
+
+assigner:
+  lambda_theta: 0.0
+  tiny_area_threshold: 0.0
+  tiny_topk_boost: 0
+  elongated_ratio_threshold: 1000000000.0
+  use_angle_aware_assign: False
