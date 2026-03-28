@@ -25,13 +25,18 @@ if __package__ in {None, ''}:
 
 from src.data.transforms.preprocess import (  # noqa: E402
     cmlc_nms_fusion,
-    get_dm_sop_crop_bbox,
     parse_xml_to_yolo_obb,
 )
 
 
 IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
 MISSING_XML_PATH = Path('__missing__.xml')
+FIXED_CROP_LEFT = 100
+FIXED_CROP_TOP = 100
+FIXED_CROP_RIGHT = 740
+FIXED_CROP_BOTTOM = 612
+FIXED_CROP_WIDTH = FIXED_CROP_RIGHT - FIXED_CROP_LEFT
+FIXED_CROP_HEIGHT = FIXED_CROP_BOTTOM - FIXED_CROP_TOP
 
 RGB_DIR_CANDIDATES = {
     'train': ['training', 'trainimg', 'img', 'rgb', 'visible', 'images'],
@@ -83,8 +88,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--ir-dir', type=str, default='', help='Optional explicit raw IR image directory.')
     parser.add_argument('--rgb-label-dir', type=str, default='', help='Optional explicit raw RGB XML directory.')
     parser.add_argument('--ir-label-dir', type=str, default='', help='Optional explicit raw IR XML directory.')
-    parser.add_argument('--low-tol', type=int, default=10, help='Near-black threshold for valid-content masking.')
-    parser.add_argument('--high-tol', type=int, default=245, help='Near-white threshold for valid-content masking.')
+    parser.add_argument(
+        '--low-tol',
+        type=int,
+        default=10,
+        help='Near-black fallback threshold for valid-content masking.',
+    )
+    parser.add_argument(
+        '--high-tol',
+        type=int,
+        default=245,
+        help='Near-white threshold for valid-content masking.',
+    )
+    parser.add_argument(
+        '--padding',
+        type=int,
+        default=0,
+        help='XML-aware safety padding added around the detected real-content crop box.',
+    )
     parser.add_argument('--log-level', type=str, default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     return parser
 
@@ -186,6 +207,16 @@ def _prepare_output_dirs(output_root: Path, split: str, overwrite: bool = False)
     }
 
 
+def _get_fixed_crop_bounds(image_width: int, image_height: int) -> Sequence[int]:
+    if image_width < FIXED_CROP_RIGHT or image_height < FIXED_CROP_BOTTOM:
+        raise ValueError(
+            'Image is smaller than the required fixed crop area: '
+            f'got {image_width}x{image_height}, need at least '
+            f'{FIXED_CROP_RIGHT}x{FIXED_CROP_BOTTOM}'
+        )
+    return FIXED_CROP_LEFT, FIXED_CROP_TOP, FIXED_CROP_RIGHT - 1, FIXED_CROP_BOTTOM - 1
+
+
 def _resolve_split_sources(
     raw_root: Path,
     split: str,
@@ -241,6 +272,7 @@ def prepare_split(
     ir_label_dir: str = '',
     low_tol: int = 10,
     high_tol: int = 245,
+    padding: int = 0,
 ) -> Dict[str, object]:
     sources = _resolve_split_sources(
         raw_root=raw_root,
@@ -268,6 +300,7 @@ def prepare_split(
         'found_ir_images': len(ir_index),
         'processed_pairs': 0,
         'missing_ir': 0,
+        'missing_xml': 0,
         'missing_rgb_label': 0,
         'missing_ir_label': 0,
         'bad_xml': 0,
@@ -306,23 +339,17 @@ def prepare_split(
         rgb_xml_path = _safe_xml_path(rgb_xml_index.get(stem), summary, 'missing_rgb_label')
         ir_xml_path = _safe_xml_path(ir_xml_index.get(stem), summary, 'missing_ir_label')
         if rgb_xml_path == MISSING_XML_PATH or ir_xml_path == MISSING_XML_PATH:
+            summary['missing_xml'] += int(rgb_xml_path == MISSING_XML_PATH) + int(ir_xml_path == MISSING_XML_PATH)
             summary['warnings'] += 1
 
         full_width = img_rgb.shape[1]
         full_height = img_rgb.shape[0]
         fallback = False
         try:
-            x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
-                img_rgb,
-                img_ir,
-                rgb_xml_path,
-                ir_xml_path,
-                low_tol=low_tol,
-                high_tol=high_tol,
-            )
-        except ET.ParseError:
-            logging.warning('Crop skipped due to bad XML for sample `%s`; using full image.', stem)
-            summary['bad_xml'] += 1
+            x_min, y_min, x_max, y_max = _get_fixed_crop_bounds(full_width, full_height)
+        except ValueError as exc:
+            logging.warning('Crop skipped for sample `%s` (%s); using full image.', stem, exc)
+            summary['warnings'] += 1
             x_min, y_min = 0, 0
             x_max, y_max = full_width - 1, full_height - 1
             fallback = True
@@ -377,10 +404,11 @@ def prepare_split(
         summary['processed_pairs'] += 1
 
     logging.info(
-        'Finished split `%s`: processed=%s missing_ir=%s bad_xml=%s empty_labels=%s crop_fallbacks=%s',
+        'Finished split `%s`: processed=%s missing_ir=%s missing_xml=%s bad_xml=%s empty_labels=%s crop_fallbacks=%s',
         split,
         summary['processed_pairs'],
         summary['missing_ir'],
+        summary['missing_xml'],
         summary['bad_xml'],
         summary['empty_labels'],
         summary['crop_fallbacks'],
@@ -399,6 +427,7 @@ def prepare_dataset(
     ir_label_dir: str = '',
     low_tol: int = 10,
     high_tol: int = 245,
+    padding: int = 0,
 ) -> Dict[str, object]:
     raw_root_path = Path(raw_root)
     output_root_path = Path(output_root)
@@ -411,6 +440,7 @@ def prepare_dataset(
         'splits': {},
         'total_processed_pairs': 0,
         'total_warnings': 0,
+        'total_missing_xml': 0,
         'total_bad_xml': 0,
         'total_empty_labels': 0,
         'total_crop_fallbacks': 0,
@@ -428,10 +458,12 @@ def prepare_dataset(
             ir_label_dir=ir_label_dir,
             low_tol=low_tol,
             high_tol=high_tol,
+            padding=padding,
         )
         overall['splits'][split] = split_summary
         overall['total_processed_pairs'] += int(split_summary['processed_pairs'])
         overall['total_warnings'] += int(split_summary['warnings'])
+        overall['total_missing_xml'] += int(split_summary['missing_xml'])
         overall['total_bad_xml'] += int(split_summary['bad_xml'])
         overall['total_empty_labels'] += int(split_summary['empty_labels'])
         overall['total_crop_fallbacks'] += int(split_summary['crop_fallbacks'])
@@ -455,6 +487,7 @@ def main() -> None:
         ir_label_dir=args.ir_label_dir,
         low_tol=args.low_tol,
         high_tol=args.high_tol,
+        padding=args.padding,
     )
     logging.info('Dataset preparation summary\n%s', json.dumps(summary, ensure_ascii=False, indent=2))
 

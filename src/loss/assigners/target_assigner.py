@@ -212,7 +212,9 @@ class DynamicTinyOBBAssigner(nn.Module):
         max_topk = max(int(candidate_budget.max().item()) if candidate_budget.numel() > 0 else self.topk, 1)
         topk_metrics, topk_idxs = torch.topk(align_metric, max_topk, dim=-1, largest=True)
         topk_overlaps = torch.gather(overlaps, 2, topk_idxs)
-        dynamic_k = torch.clamp(torch.round(topk_overlaps.sum(dim=-1)), min=1.0, max=candidate_budget.float()).int()
+        dynamic_k = torch.round(topk_overlaps.sum(dim=-1))
+        dynamic_k = torch.maximum(dynamic_k, torch.ones_like(dynamic_k))
+        dynamic_k = torch.minimum(dynamic_k, candidate_budget.float()).int()
 
         seq = torch.arange(max_topk, device=device).view(1, 1, -1)
         k_mask = seq < dynamic_k.unsqueeze(-1)

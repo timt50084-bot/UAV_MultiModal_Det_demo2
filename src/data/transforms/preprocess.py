@@ -1,7 +1,7 @@
 """Dataset preprocessing helpers reused by the formal dataset preparation CLI.
 
 This module intentionally stays lightweight and file-oriented. Training-time
-augmentation belongs in `augmentations.py` and should not be added here.
+augmentation belongs in ``augmentations.py`` and should not be added here.
 """
 
 import xml.etree.ElementTree as ET
@@ -101,7 +101,13 @@ def _extract_object_bounds(obj):
 
 
 def _as_content_mask(image, low_tol=10, high_tol=245):
-    """Return a mask that excludes both near-black and near-white background."""
+    """Return a content mask with white-border removal as the primary goal.
+
+    DroneVehicle preprocessing is mainly affected by near-white borders, but a
+    small near-black fallback remains important so obviously blank edge bands or
+    all-black failure cases do not pin the crop to the full image.
+    """
+
     array = np.asarray(image)
     if array.ndim == 3:
         near_black = (array <= low_tol).all(axis=2)
@@ -129,13 +135,14 @@ def _find_stable_span(counts, min_pixels, window=3, min_hits=2):
 
 
 def _mask_to_bounds(mask):
-    """Convert a noisy content mask to a stable bbox for border trimming."""
+    """Convert a noisy content mask to a stable crop bbox."""
+
     mask_uint8 = mask.astype(np.uint8)
     if mask_uint8.sum() == 0:
         return None
 
-    # Remove tiny isolated speckles so a few noisy pixels do not pin the crop
-    # to the image border and leave residual white margins.
+    # Remove isolated speckles so a handful of border pixels do not keep the
+    # crop stuck to the image edge.
     kernel = np.ones((3, 3), dtype=np.uint8)
     cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
     if cleaned.sum() == 0:
@@ -180,11 +187,44 @@ def _line_invalid_ratio(values, low_tol=10, high_tol=245, invalid_ratio=0.94):
     if black_ratio >= invalid_ratio or white_ratio >= invalid_ratio:
         return True
 
-    # JPEG white borders are not always pure 255. Treat low-texture bright
-    # edge bands as invalid too so they can be trimmed consistently.
+    # JPEG-compressed white margins are often slightly off-white. Treat bright,
+    # low-texture edge bands as invalid too.
     if mean_value >= high_tol - 12 and std_value <= 12.0:
         return True
     return False
+
+
+def _line_has_white_border(values, high_tol=245, white_ratio=0.94, soft_margin=12):
+    values = np.asarray(values)
+    soft_tol = max(0, int(high_tol) - int(soft_margin))
+    if values.ndim == 2:
+        near_white = (values >= high_tol).all(axis=1)
+        soft_white = (values >= soft_tol).all(axis=1)
+    else:
+        near_white = values >= high_tol
+        soft_white = values >= soft_tol
+
+    pure_ratio = float(near_white.mean())
+    soft_ratio = float(soft_white.mean())
+    mean_value = float(values.mean())
+    std_value = float(values.std())
+
+    if pure_ratio >= white_ratio:
+        return True
+    if soft_ratio >= white_ratio and std_value <= 18.0:
+        return True
+    if mean_value >= soft_tol and std_value <= 12.0:
+        return True
+    return False
+
+
+def _line_is_pure_white(values, high_tol=245, pure_ratio=0.995):
+    values = np.asarray(values)
+    if values.ndim == 2:
+        near_white = (values >= high_tol).all(axis=1)
+    else:
+        near_white = values >= high_tol
+    return float(near_white.mean()) >= pure_ratio
 
 
 def _trim_single_image_edges(image, low_tol=10, high_tol=245):
@@ -218,7 +258,8 @@ def _trim_single_image_edges(image, low_tol=10, high_tol=245):
 
 
 def _trim_border_edges(img_rgb, img_ir, low_tol=10, high_tol=245):
-    """Trim obvious white/black border bands from each modality, then align."""
+    """Trim obvious white-border bands from each modality, with black fallback."""
+
     rgb_left, rgb_top, rgb_right, rgb_bottom = _trim_single_image_edges(
         img_rgb, low_tol=low_tol, high_tol=high_tol
     )
@@ -231,6 +272,119 @@ def _trim_border_edges(img_rgb, img_ir, low_tol=10, high_tol=245):
         min(rgb_right, ir_right),
         min(rgb_bottom, ir_bottom),
     )
+
+
+def _collect_joint_object_bounds(xml_rgb, xml_ir):
+    all_bounds = []
+    for xml_path in (xml_rgb, xml_ir):
+        if xml_path is None:
+            continue
+        xml_path = Path(xml_path)
+        if not xml_path.exists():
+            continue
+        tree = ET.parse(xml_path)
+        for obj in tree.getroot().findall('object'):
+            bounds = _extract_object_bounds(obj)
+            if bounds is not None:
+                all_bounds.append(bounds)
+
+    if not all_bounds:
+        return None
+
+    x_min = min(bounds[0] for bounds in all_bounds)
+    y_min = min(bounds[1] for bounds in all_bounds)
+    x_max = max(bounds[2] for bounds in all_bounds)
+    y_max = max(bounds[3] for bounds in all_bounds)
+    return (
+        int(np.floor(x_min)),
+        int(np.floor(y_min)),
+        int(np.ceil(x_max)),
+        int(np.ceil(y_max)),
+    )
+
+
+def _trim_residual_white_borders(img_rgb, img_ir, bounds, xml_rgb, xml_ir, high_tol=245, padding=20):
+    x_min, y_min, x_max, y_max = [int(value) for value in bounds]
+    object_bounds = _collect_joint_object_bounds(xml_rgb, xml_ir)
+    guard_margin = max(0, min(int(padding), 8))
+    image_height, image_width = img_rgb.shape[:2]
+
+    min_obj_x = object_bounds[0] - guard_margin if object_bounds is not None else None
+    min_obj_y = object_bounds[1] - guard_margin if object_bounds is not None else None
+    max_obj_x = object_bounds[2] + guard_margin if object_bounds is not None else None
+    max_obj_y = object_bounds[3] + guard_margin if object_bounds is not None else None
+    if object_bounds is not None:
+        left_extra = min(12, max(0, int(object_bounds[0] * 0.12)))
+        top_extra = min(12, max(0, int(object_bounds[1] * 0.12)))
+        right_extra = min(12, max(0, int((image_width - 1 - object_bounds[2]) * 0.12)))
+        bottom_extra = min(12, max(0, int((image_height - 1 - object_bounds[3]) * 0.12)))
+        min_pure_white_x = object_bounds[0] - guard_margin + left_extra
+        min_pure_white_y = object_bounds[1] - guard_margin + top_extra
+        max_pure_white_x = object_bounds[2] + guard_margin - right_extra
+        max_pure_white_y = object_bounds[3] + guard_margin - bottom_extra
+    else:
+        min_pure_white_x = None
+        min_pure_white_y = None
+        max_pure_white_x = None
+        max_pure_white_y = None
+
+    while x_min < x_max:
+        rgb_col = img_rgb[y_min:y_max + 1, x_min]
+        ir_col = img_ir[y_min:y_max + 1, x_min]
+        if _line_is_pure_white(rgb_col, high_tol=high_tol) and _line_is_pure_white(ir_col, high_tol=high_tol):
+            if min_pure_white_x is not None and x_min >= min_pure_white_x:
+                break
+            x_min += 1
+            continue
+        if not (_line_has_white_border(rgb_col, high_tol=high_tol) and _line_has_white_border(ir_col, high_tol=high_tol)):
+            break
+        if min_obj_x is not None and x_min >= min_obj_x:
+            break
+        x_min += 1
+
+    while y_min < y_max:
+        rgb_row = img_rgb[y_min, x_min:x_max + 1]
+        ir_row = img_ir[y_min, x_min:x_max + 1]
+        if _line_is_pure_white(rgb_row, high_tol=high_tol) and _line_is_pure_white(ir_row, high_tol=high_tol):
+            if min_pure_white_y is not None and y_min >= min_pure_white_y:
+                break
+            y_min += 1
+            continue
+        if not (_line_has_white_border(rgb_row, high_tol=high_tol) and _line_has_white_border(ir_row, high_tol=high_tol)):
+            break
+        if min_obj_y is not None and y_min >= min_obj_y:
+            break
+        y_min += 1
+
+    while x_max > x_min:
+        rgb_col = img_rgb[y_min:y_max + 1, x_max]
+        ir_col = img_ir[y_min:y_max + 1, x_max]
+        if _line_is_pure_white(rgb_col, high_tol=high_tol) and _line_is_pure_white(ir_col, high_tol=high_tol):
+            if max_pure_white_x is not None and x_max <= max_pure_white_x:
+                break
+            x_max -= 1
+            continue
+        if not (_line_has_white_border(rgb_col, high_tol=high_tol) and _line_has_white_border(ir_col, high_tol=high_tol)):
+            break
+        if max_obj_x is not None and x_max <= max_obj_x:
+            break
+        x_max -= 1
+
+    while y_max > y_min:
+        rgb_row = img_rgb[y_max, x_min:x_max + 1]
+        ir_row = img_ir[y_max, x_min:x_max + 1]
+        if _line_is_pure_white(rgb_row, high_tol=high_tol) and _line_is_pure_white(ir_row, high_tol=high_tol):
+            if max_pure_white_y is not None and y_max <= max_pure_white_y:
+                break
+            y_max -= 1
+            continue
+        if not (_line_has_white_border(rgb_row, high_tol=high_tol) and _line_has_white_border(ir_row, high_tol=high_tol)):
+            break
+        if max_obj_y is not None and y_max <= max_obj_y:
+            break
+        y_max -= 1
+
+    return x_min, y_min, x_max, y_max
 
 
 def _expand_bbox_by_xml(xml_path, current_bounds, image_width, image_height, padding):
@@ -264,7 +418,16 @@ def get_dm_sop_crop_bbox(
     high_tol=245,
     padding=20,
 ):
-    """Compute a joint RGB/IR crop bbox that removes white and black borders."""
+    """Compute a joint RGB/IR crop bbox from real content plus XML protection."""
+
+    if img_rgb is None or img_ir is None:
+        raise ValueError('img_rgb and img_ir must be valid images.')
+
+    if img_rgb.shape[:2] != img_ir.shape[:2]:
+        raise ValueError(
+            f'RGB/IR image shapes must match for aligned cropping: {img_rgb.shape[:2]} vs {img_ir.shape[:2]}'
+        )
+
     height, width = img_rgb.shape[:2]
 
     mask_rgb = _as_content_mask(img_rgb, low_tol=low_tol, high_tol=high_tol)
@@ -287,6 +450,15 @@ def get_dm_sop_crop_bbox(
 
     bounds = _expand_bbox_by_xml(xml_rgb, bounds, width, height, padding)
     bounds = _expand_bbox_by_xml(xml_ir, bounds, width, height, padding)
+    bounds = _trim_residual_white_borders(
+        img_rgb,
+        img_ir,
+        bounds,
+        xml_rgb,
+        xml_ir,
+        high_tol=high_tol,
+        padding=padding,
+    )
 
     x_min, y_min, x_max, y_max = bounds
     x_min = max(0, min(int(x_min), width - 1))
@@ -309,7 +481,8 @@ def fit_crop_bbox_to_target_size(
     target_width=640,
     target_height=512,
 ):
-    """Fit a crop bbox to a fixed output size while staying inside the image."""
+    """Keep the legacy fixed-size helper for compatibility only."""
+
     crop_width = min(int(target_width), int(image_width))
     crop_height = min(int(target_height), int(image_height))
 
@@ -379,7 +552,8 @@ def cmlc_nms_fusion(yolo_lines_rgb, yolo_lines_ir, iou_thresh=0.4):
                 remaining.append(other)
 
         keep_lines.append(
-            f"{current['cls']} {fused_box[0]:.6f} {fused_box[1]:.6f} {fused_box[2]:.6f} {fused_box[3]:.6f} {fused_box[4]:.6f}"
+            f"{current['cls']} {fused_box[0]:.6f} {fused_box[1]:.6f} "
+            f"{fused_box[2]:.6f} {fused_box[3]:.6f} {fused_box[4]:.6f}"
         )
         parsed_boxes = remaining
 

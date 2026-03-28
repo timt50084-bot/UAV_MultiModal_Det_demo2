@@ -26,6 +26,28 @@ def _clone_dataset_cfg(dataset_cfg):
     return deepcopy(dataset_cfg)
 
 
+def _clone_performance_cfg(cfg):
+    performance_cfg = cfg.get('performance', {}) if hasattr(cfg, 'get') else {}
+    if OmegaConf is not None and OmegaConf.is_config(performance_cfg):
+        return OmegaConf.to_container(performance_cfg, resolve=True)
+    if isinstance(performance_cfg, dict):
+        return deepcopy(performance_cfg)
+    if hasattr(performance_cfg, 'items'):
+        return dict(performance_cfg.items())
+    return {}
+
+
+def _clone_dataloader_cfg(cfg):
+    dataloader_cfg = cfg.get('dataloader', {}) if hasattr(cfg, 'get') else {}
+    if OmegaConf is not None and OmegaConf.is_config(dataloader_cfg):
+        return OmegaConf.to_container(dataloader_cfg, resolve=True)
+    if isinstance(dataloader_cfg, dict):
+        return deepcopy(dataloader_cfg)
+    if hasattr(dataloader_cfg, 'items'):
+        return dict(dataloader_cfg.items())
+    return {}
+
+
 def create_small_object_sampler(label_dir, dataset_len, small_threshold=0.05):
     label_dir = Path(label_dir)
     weights = []
@@ -77,10 +99,19 @@ def build_dataloader(cfg, is_training=True):
     _ensure_data_modules_registered()
 
     dataset_cfg = _clone_dataset_cfg(cfg.dataset)
+    dataloader_cfg = _clone_dataloader_cfg(cfg)
+    performance_cfg = _clone_performance_cfg(cfg)
+    dataloader_perf_cfg = performance_cfg.get('dataloader', {}) if isinstance(performance_cfg, dict) else {}
     dataset_cfg['split'] = 'train' if is_training else 'val'
     dataset_cfg['is_training'] = is_training
-    dataset_cfg['use_temporal'] = bool(cfg.model.get('temporal_enabled', False))
-    dataset_cfg['temporal_stride'] = int(cfg.model.get('temporal_stride', 1))
+    model_cfg = cfg.get('model', {}) if hasattr(cfg, 'get') else {}
+    temporal_cfg = model_cfg.get('temporal', {}) if hasattr(model_cfg, 'get') else {}
+    dataset_cfg['use_temporal'] = bool(
+        temporal_cfg.get('enabled', model_cfg.get('temporal_enabled', False))
+    )
+    dataset_cfg['temporal_stride'] = int(
+        temporal_cfg.get('stride', model_cfg.get('temporal_stride', 1))
+    )
     dataset = DATASETS.build(dataset_cfg)
 
     sampler = None
@@ -90,19 +121,27 @@ def build_dataloader(cfg, is_training=True):
     if is_distributed:
         sampler = DistributedSampler(dataset, shuffle=shuffle)
         shuffle = False
-    elif is_training and cfg.get('use_log_sampler', False):
+    elif is_training and dataloader_cfg.get('use_log_sampler', False):
         lbl_dir = Path(dataset_cfg['root_dir']) / dataset_cfg['split'] / 'labels' / 'merged'
         sampler = create_small_object_sampler(lbl_dir, len(dataset))
         shuffle = False
 
+    dataloader_kwargs = {}
+    if int(dataloader_cfg.get('num_workers', 0)) > 0:
+        dataloader_kwargs['persistent_workers'] = bool(dataloader_perf_cfg.get('persistent_workers', True))
+        prefetch_factor = dataloader_perf_cfg.get('prefetch_factor', None)
+        if prefetch_factor is not None:
+            dataloader_kwargs['prefetch_factor'] = max(1, int(prefetch_factor))
+
     dataloader = DataLoader(
         dataset,
-        batch_size=cfg.batch_size,
+        batch_size=dataloader_cfg.get('batch_size', 1),
         shuffle=shuffle,
         sampler=sampler,
-        num_workers=cfg.num_workers,
+        num_workers=dataloader_cfg.get('num_workers', 0),
         collate_fn=collate_fn,
-        pin_memory=True,
-        drop_last=is_training
+        pin_memory=bool(dataloader_cfg.get('pin_memory', True)),
+        drop_last=is_training,
+        **dataloader_kwargs,
     )
     return dataloader, dataset

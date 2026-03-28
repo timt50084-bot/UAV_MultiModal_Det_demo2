@@ -15,7 +15,11 @@ from src.loss.builder import build_assigner, build_loss
 from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
 from src.utils.config import load_config
-from src.utils.config_utils import apply_experiment_runtime_overrides
+from src.utils.config_utils import (
+    apply_experiment_runtime_overrides,
+    format_effective_train_config_summary,
+    save_resolved_config,
+)
 
 
 def set_seed(seed=42):
@@ -30,17 +34,28 @@ def parse_args():
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
     parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
     parser.add_argument('--resume', type=str, default='', help='Optional checkpoint to resume from.')
-    return parser.parse_args()
+    return parser.parse_known_args()
 
 
 def main():
-    args = parse_args()
-    cfg = load_config(args.config)
+    args, cli_overrides = parse_args()
+    cfg, cfg_meta = load_config(args.config, cli_args=cli_overrides, return_meta=True)
     cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
+    resolved_config_path = save_resolved_config(cfg, run_name)
 
     device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
     print(f'\nTraining device: {device}')
     print(f'Experiment name: {run_name}')
+    print(
+        format_effective_train_config_summary(
+            cfg,
+            args.config,
+            resolved_config_path,
+            source_config_path=cfg_meta.get('source_config_path'),
+        )
+    )
+    for warning in cfg_meta.get('warnings', []):
+        print(f'[Config Warning] {warning}')
     set_seed(42)
 
     if device.type == 'cuda':
@@ -48,6 +63,7 @@ def main():
 
     train_loader, _ = build_dataloader(cfg, is_training=True)
     val_loader, _ = build_dataloader(cfg, is_training=False)
+    print(f'Train loader steps per epoch: {len(train_loader)}')
 
     model = build_model(cfg.model).to(device)
     if args.resume and os.path.exists(args.resume):
@@ -88,9 +104,11 @@ def main():
         device=device,
         epochs=cfg.train.epochs,
         accumulate=cfg.train.accumulate,
+        grad_clip=cfg.train.grad_clip,
         use_amp=cfg.train.use_amp,
         evaluator=evaluator,
         callbacks=callbacks,
+        performance_cfg=cfg.get('performance', {}) if hasattr(cfg, 'get') else {},
     )
 
     print('\nStarting training loop...')

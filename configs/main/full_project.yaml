@@ -3,11 +3,13 @@ experiment:
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
-# Final-model training knobs for this experiment.
-# For day-to-day training changes, prefer editing this file instead of default.yaml.
-batch_size: 4
-num_workers: 8
-use_log_sampler: True
+# Daily full-project training entry.
+# Most day-to-day training changes should happen in the block below.
+dataloader:
+  batch_size: 4
+  num_workers: 8
+  use_log_sampler: True
+  pin_memory: True
 
 dataset:
   root_dir: 'D:/DataSet/DroneVehicle_Processed'
@@ -15,7 +17,7 @@ dataset:
 
 train:
   # Device selection stays in the CLI: `python tools/train.py --device 0`
-  epochs: 1
+  epochs: 12
   patience: 10
   lr: 0.001
   weight_decay: 0.0005

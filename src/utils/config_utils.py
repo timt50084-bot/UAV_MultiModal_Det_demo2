@@ -1,4 +1,8 @@
-﻿from pathlib import Path
+from pathlib import Path
+
+from omegaconf import OmegaConf
+
+from src.utils.config import get_config_value
 
 
 def infer_experiment_name(cfg, config_path=None):
@@ -13,6 +17,12 @@ def infer_experiment_name(cfg, config_path=None):
     return 'default'
 
 
+def get_experiment_run_root(cfg, run_name):
+    experiment_cfg = cfg.get('experiment', {}) if hasattr(cfg, 'get') else {}
+    output_root = experiment_cfg.get('output_root', 'outputs/experiments') if hasattr(experiment_cfg, 'get') else 'outputs/experiments'
+    return Path(output_root) / run_name
+
+
 def apply_experiment_runtime_overrides(cfg, config_path=None):
     if not hasattr(cfg, 'get'):
         return cfg, infer_experiment_name(cfg, config_path)
@@ -24,8 +34,7 @@ def apply_experiment_runtime_overrides(cfg, config_path=None):
     if not enable_unified_dirs:
         return cfg, run_name
 
-    output_root = Path(experiment_cfg.get('output_root', 'outputs/experiments'))
-    run_root = output_root / run_name
+    run_root = get_experiment_run_root(cfg, run_name)
 
     if 'train' in cfg and cfg.train is not None:
         current_save_dir = cfg.train.get('save_dir', 'outputs/weights')
@@ -45,3 +54,35 @@ def apply_experiment_runtime_overrides(cfg, config_path=None):
             cfg.tracking_eval.output_dir = str(run_root / 'tracking_eval')
 
     return cfg, run_name
+
+
+def save_resolved_config(cfg, run_name, filename='resolved_config.yaml'):
+    run_root = get_experiment_run_root(cfg, run_name)
+    run_root.mkdir(parents=True, exist_ok=True)
+    resolved_path = run_root / filename
+    with resolved_path.open('w', encoding='utf-8') as handle:
+        handle.write(OmegaConf.to_yaml(cfg, resolve=True))
+    return resolved_path
+
+
+def format_effective_train_config_summary(cfg, config_path, resolved_config_path, source_config_path=None):
+    lines = [
+        '',
+        'Effective training config:',
+        f'  config entry: {config_path}',
+    ]
+    if source_config_path and source_config_path != config_path:
+        lines.append(f'  source config: {source_config_path}')
+    lines.extend([
+        f'  resolved config: {resolved_config_path}',
+        f"  Effective batch_size: {get_config_value(cfg, 'dataloader.batch_size')}",
+        f"  Effective num_workers: {get_config_value(cfg, 'dataloader.num_workers')}",
+        f"  Effective dataset.imgsz: {get_config_value(cfg, 'dataset.imgsz')}",
+        f"  Effective train.epochs: {get_config_value(cfg, 'train.epochs')}",
+        f"  Effective train.lr: {get_config_value(cfg, 'train.lr')}",
+        f"  Effective use_log_sampler: {get_config_value(cfg, 'dataloader.use_log_sampler')}",
+        f"  Effective performance.profile_train: {get_config_value(cfg, 'performance.profile_train')}",
+        f"  Effective performance.dataloader.persistent_workers: {get_config_value(cfg, 'performance.dataloader.persistent_workers')}",
+        f"  Effective performance.dataloader.prefetch_factor: {get_config_value(cfg, 'performance.dataloader.prefetch_factor')}",
+    ])
+    return '\n'.join(lines)

@@ -1,16 +1,77 @@
 import re
+import time
 
+import numpy as np
 import torch
-from torch.amp import GradScaler, autocast
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 
 from src.model.bbox_utils import make_anchors
 from src.model.output_adapter import flatten_predictions
 
 
+class TrainTimingProfile:
+    STAGES = (
+        'data_time',
+        'target_time',
+        'forward_time',
+        'loss_time',
+        'backward_time',
+        'optim_time',
+        'post_time',
+        'iter_time',
+    )
+
+    def __init__(self, enabled=False, max_iters=50):
+        self.enabled = enabled
+        self.max_iters = max(1, int(max_iters))
+        self.reset()
+
+    def reset(self):
+        self.count = 0
+        self.totals = {name: 0.0 for name in self.STAGES}
+
+    def should_profile(self, iteration_idx):
+        return self.enabled and iteration_idx < self.max_iters
+
+    def update(self, stage_times):
+        if not self.enabled:
+            return
+        self.count += 1
+        for name in self.STAGES:
+            self.totals[name] += float(stage_times.get(name, 0.0))
+
+    def has_samples(self):
+        return self.count > 0
+
+    def format_summary(self, epoch, eval_time=None):
+        if not self.has_samples():
+            return ''
+
+        avg_iter_ms = (self.totals['iter_time'] / self.count) * 1000.0
+        lines = [
+            f"[Train Profile][Epoch {epoch}] averaged over first {self.count} iterations:",
+        ]
+        lines.append(
+            "  "
+            + " | ".join(
+                f"{name.replace('_time', '')}={self.totals[name] / self.count * 1000.0:.1f}ms"
+                f" ({(self.totals[name] / max(self.totals['iter_time'], 1e-12)) * 100.0:.1f}%)"
+                for name in self.STAGES
+                if name != 'iter_time'
+            )
+            + f" | iter={avg_iter_ms:.1f}ms"
+        )
+        if eval_time is not None:
+            lines.append(f"  eval={eval_time:.2f}s")
+        return "\n".join(lines)
+
+
 class Trainer:
     def __init__(self, model, train_loader, optimizer, scheduler, criterion, assigner,
-                 device, epochs, accumulate=1, grad_clip=10.0, use_amp=True, evaluator=None, callbacks=None):
+                 device, epochs, accumulate=1, grad_clip=10.0, use_amp=True, evaluator=None, callbacks=None,
+                 performance_cfg=None):
         self.model = model
         self.train_loader = train_loader
         self.optimizer = optimizer
@@ -21,11 +82,17 @@ class Trainer:
         self.epochs = epochs
         self.accumulate = max(1, accumulate)
         self.grad_clip = grad_clip
-        self.use_amp = use_amp
+        self.use_amp = bool(use_amp and self.device.type == 'cuda')
+        self.performance_cfg = dict(performance_cfg or {})
+        self.progress_log_interval = max(1, int(self.performance_cfg.get('log_interval', 10)))
+        self.profile_train = bool(self.performance_cfg.get('profile_train', False))
+        self.profile_iters = max(1, int(self.performance_cfg.get('profile_iters', 50)))
+        self.profile_cuda = bool(self.performance_cfg.get('profile_cuda', self.device.type == 'cuda'))
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
         self.scaler = GradScaler(enabled=self.use_amp)
+        self._anchor_cache = {}
 
         self.current_epoch = 0
         self.current_metrics = None
@@ -46,8 +113,24 @@ class Trainer:
         for cb in self.callbacks:
             getattr(cb, hook_name, lambda x: None)(self)
 
+    def _profile_stamp(self):
+        if self.profile_cuda and self.device.type == 'cuda':
+            torch.cuda.synchronize(self.device)
+        return time.perf_counter()
+
+    def _get_anchor_points(self, feats_for_anchors, strides):
+        cache_key = tuple(
+            (tuple(feat.shape[-2:]), str(feat.device), str(feat.dtype))
+            for feat in feats_for_anchors
+        )
+        anchor_points = self._anchor_cache.get(cache_key)
+        if anchor_points is None:
+            anchor_points, _ = make_anchors(feats_for_anchors, strides)
+            self._anchor_cache = {cache_key: anchor_points}
+        return anchor_points
+
     def format_targets(self, targets, batch_size):
-        targets_np = targets.cpu().numpy()
+        targets_np = targets.numpy() if targets.device.type == 'cpu' else targets.cpu().numpy()
         gt_dict = {b: [] for b in range(batch_size)}
         for target in targets_np:
             gt_dict[int(target[0])].append(target[1:])
@@ -62,7 +145,8 @@ class Trainer:
             for batch_idx in range(batch_size):
                 num_gts = len(gt_dict[batch_idx])
                 if num_gts > 0:
-                    gt_tensor = torch.tensor(gt_dict[batch_idx], device=self.device, dtype=torch.float32)
+                    gt_array = np.asarray(gt_dict[batch_idx], dtype=np.float32)
+                    gt_tensor = torch.from_numpy(gt_array).to(self.device)
                     gt_labels[batch_idx, :num_gts, 0] = gt_tensor[:, 0]
                     gt_bboxes[batch_idx, :num_gts, :] = gt_tensor[:, 1:6]
                     mask_gt[batch_idx, :num_gts, 0] = 1.0
@@ -85,26 +169,47 @@ class Trainer:
 
             pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             self.optimizer.zero_grad()
-            total_loss_epoch = 0.0
+            total_loss_epoch = None
+            timing_profile = TrainTimingProfile(enabled=self.profile_train, max_iters=self.profile_iters)
+            last_iter_end = time.perf_counter()
 
             for i, (imgs_rgb, imgs_ir, targets, prev_rgb, prev_ir) in enumerate(pbar):
                 self.trigger_callbacks('on_batch_begin')
+                if i == 0:
+                    print(f'First train batch imgs_rgb.shape: {tuple(imgs_rgb.shape)}')
+                profile_iter = timing_profile.should_profile(i)
+                stage_times = {name: 0.0 for name in TrainTimingProfile.STAGES} if profile_iter else None
+                iter_start = time.perf_counter()
+                if profile_iter:
+                    stage_times['data_time'] = iter_start - last_iter_end
+                    stage_start = self._profile_stamp()
 
                 imgs_rgb = imgs_rgb.to(self.device, non_blocking=True)
                 imgs_ir = imgs_ir.to(self.device, non_blocking=True)
                 prev_rgb = prev_rgb.to(self.device, non_blocking=True)
                 prev_ir = prev_ir.to(self.device, non_blocking=True)
                 batch_size = imgs_rgb.shape[0]
+                if profile_iter:
+                    stage_times['data_time'] += self._profile_stamp() - stage_start
+                    stage_start = self._profile_stamp()
+                gt_labels, gt_bboxes, mask_gt = self.format_targets(targets, batch_size)
+                if profile_iter:
+                    stage_times['target_time'] = self._profile_stamp() - stage_start
 
                 with autocast(device_type=self.device.type, enabled=self.use_amp):
+                    if profile_iter:
+                        stage_start = self._profile_stamp()
                     outputs, feat_rgb, feat_ir = self.model(imgs_rgb, imgs_ir, prev_rgb=prev_rgb, prev_ir=prev_ir)
                     flat_preds, feats_for_anchors = flatten_predictions(outputs)
 
                     strides = [4, 8, 16, 32]
-                    anchor_points, _ = make_anchors(feats_for_anchors, strides)
+                    anchor_points = self._get_anchor_points(feats_for_anchors, strides)
+                    if profile_iter:
+                        stage_times['forward_time'] = self._profile_stamp() - stage_start
 
-                    gt_labels, gt_bboxes, mask_gt = self.format_targets(targets, batch_size)
                     pred_bboxes, pred_scores = flat_preds[..., :5], flat_preds[..., 5:]
+                    if profile_iter:
+                        stage_start = self._profile_stamp()
 
                     target_labels, target_bboxes, target_scores, fg_mask = self.assigner(
                         pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes, mask_gt
@@ -141,14 +246,22 @@ class Trainer:
                         loss_total = flat_preds.sum() * 0.0
 
                     loss_total = loss_total / self.accumulate
+                    if profile_iter:
+                        stage_times['loss_time'] = self._profile_stamp() - stage_start
 
                 if not torch.isfinite(loss_total):
                     print("\nWarning: encountered non-finite loss, skipping batch.")
                     self.optimizer.zero_grad()
                     continue
 
+                if profile_iter:
+                    stage_start = self._profile_stamp()
                 self.scaler.scale(loss_total).backward()
+                if profile_iter:
+                    stage_times['backward_time'] = self._profile_stamp() - stage_start
 
+                if profile_iter:
+                    stage_start = self._profile_stamp()
                 if (i + 1) % self.accumulate == 0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip)
@@ -156,15 +269,38 @@ class Trainer:
                     self.scaler.update()
                     self.optimizer.zero_grad()
                     self.trigger_callbacks('on_batch_end')
+                if profile_iter:
+                    stage_times['optim_time'] = self._profile_stamp() - stage_start
 
-                total_loss_epoch += loss_total.item() * self.accumulate
-                pbar.set_postfix({"Loss": f"{total_loss_epoch / (i + 1):.4f}"})
+                batch_loss = loss_total.detach() * self.accumulate
+                total_loss_epoch = batch_loss if total_loss_epoch is None else total_loss_epoch + batch_loss
+                should_log = ((i + 1) % self.progress_log_interval == 0) or ((i + 1) == len(self.train_loader))
+                if should_log and total_loss_epoch is not None:
+                    avg_loss = total_loss_epoch.item() / (i + 1)
+                    pbar.set_postfix({"Loss": f"{avg_loss:.4f}"})
+
+                if profile_iter:
+                    iter_end = self._profile_stamp()
+                    stage_times['iter_time'] = iter_end - iter_start
+                    measured_time = sum(stage_times[name] for name in TrainTimingProfile.STAGES if name not in {'post_time', 'iter_time'})
+                    stage_times['post_time'] = max(stage_times['iter_time'] - measured_time, 0.0)
+                    timing_profile.update(stage_times)
+                    last_iter_end = iter_end
+                else:
+                    last_iter_end = time.perf_counter()
 
             self.scheduler.step()
 
+            eval_time = None
             if self.evaluator:
                 eval_model = getattr(self, 'ema_callback').ema if hasattr(self, 'ema_callback') else self.model
+                eval_start = self._profile_stamp() if self.profile_train else time.perf_counter()
                 self.current_metrics = self.evaluator.evaluate(eval_model, epoch=epoch + 1)
+                eval_end = self._profile_stamp() if self.profile_train else time.perf_counter()
+                eval_time = eval_end - eval_start
+
+            if timing_profile.has_samples():
+                print(f"\n{timing_profile.format_summary(epoch + 1, eval_time=eval_time)}")
 
             self.trigger_callbacks('on_epoch_end')
 

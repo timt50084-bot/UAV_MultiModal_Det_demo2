@@ -2,6 +2,7 @@ import time
 from copy import deepcopy
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.amp import autocast
@@ -196,11 +197,18 @@ class Evaluator:
             t2 = time.time()
             t3 = t2
 
-            targets_np = targets.cpu().numpy()
+            targets_np = targets.numpy() if targets.device.type == 'cpu' else targets.cpu().numpy()
             gt_dict = {b: [] for b in range(eval_rgb.shape[0])}
             for target in targets_np:
                 gt_dict[int(target[0])].append(target[1:])
-            batch_gts = [torch.tensor(gt_dict[i], dtype=torch.float32, device='cpu') for i in range(eval_rgb.shape[0])]
+            batch_gts = []
+            for sample_idx in range(eval_rgb.shape[0]):
+                gt_items = gt_dict[sample_idx]
+                if gt_items:
+                    gt_array = np.asarray(gt_items, dtype=np.float32)
+                    batch_gts.append(torch.from_numpy(gt_array))
+                else:
+                    batch_gts.append(torch.zeros((0, 6), dtype=torch.float32))
 
             image_ids, batch_metadata = self._build_image_ids_and_metadata(epoch, batch_idx, eval_rgb.shape[0], sample_offset)
             preds = [pred.cpu() for pred in preds]

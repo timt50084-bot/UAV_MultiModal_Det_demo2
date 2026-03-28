@@ -1,8 +1,13 @@
 # Base configuration for training, validation, inference, and lightweight tracking.
+# Canonical training loader knobs now live under `dataloader.*`.
+# Legacy top-level `batch_size` / `num_workers` / `use_log_sampler` remain compatible
+# for old experiment files, but they will emit a deprecation warning at startup.
 
-batch_size: 2
-num_workers: 8
-use_log_sampler: True
+dataloader:
+  batch_size: 2
+  num_workers: 8
+  use_log_sampler: True
+  pin_memory: True
 
 # Experiment routing
 experiment:
@@ -62,6 +67,15 @@ train:
   grad_clip: 10.0
   patience: 50
   save_dir: 'outputs/weights'
+
+performance:
+  profile_train: False
+  profile_iters: 50
+  profile_cuda: True
+  log_interval: 10
+  dataloader:
+    persistent_workers: True
+    prefetch_factor: 2
 
 val:
   nms:
