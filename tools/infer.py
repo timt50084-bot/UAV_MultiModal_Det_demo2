@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import json
 from pathlib import Path
 
@@ -20,12 +20,18 @@ from src.tracking import (
 )
 from src.utils.config import load_config
 from src.utils.config_utils import apply_experiment_runtime_overrides
-from src.utils.postprocess_tuning import apply_classwise_thresholds, normalize_infer_cfg
+from src.utils.postprocess_tuning import (
+    apply_classwise_thresholds,
+    describe_classwise_thresholds,
+    describe_tta_settings,
+    normalize_infer_cfg,
+)
 from src.utils.result_merge import merge_obb_predictions
 from src.utils.tta import apply_tta_transforms, build_tta_transforms, invert_tta_predictions
 
 COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (0, 0, 255)]
 IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
+SCENE_CONTEXT_KEYS = ('time_of_day', 'weather', 'visibility')
 
 
 def letterbox(img, new_shape=(1024, 1024), color=(114, 114, 114), stride=32):
@@ -264,6 +270,32 @@ def draw_result_records(image, results, class_names):
     return draw_obb(image, obb_boxes, scores, classes, class_names, track_ids=track_ids, states=states)
 
 
+def resolve_tracking_scene_context(tracking_cfg):
+    modality_cfg = tracking_cfg.get('modality', {}) if isinstance(tracking_cfg, dict) else {}
+    raw_scene_context = modality_cfg.get('scene_context', {}) if isinstance(modality_cfg.get('scene_context', {}), dict) else {}
+    scene_context = {}
+    for key in SCENE_CONTEXT_KEYS:
+        value = raw_scene_context.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            scene_context[key] = text
+    return scene_context
+
+
+def build_tracking_frame_meta(frame_index, rgb_path, sequence_mode=False, scene_context=None):
+    path = Path(rgb_path)
+    frame_meta = {
+        'frame_index': frame_index,
+        'image_id': path.name,
+        'sequence_id': path.parent.name if sequence_mode else 'single_sequence',
+    }
+    if scene_context:
+        frame_meta.update(dict(scene_context))
+    return frame_meta
+
+
 def main():
     parser = argparse.ArgumentParser(description='Run RGB/IR OBB inference with optional tracking refinement.')
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
@@ -285,9 +317,26 @@ def main():
 
     print(f'Experiment name: {run_name}')
     print(f'Infer mode: {infer_cfg["mode"]}')
+    print(f'TTA: {describe_tta_settings(infer_cfg)}')
+    print(f'Classwise thresholds: {describe_classwise_thresholds(infer_cfg.get("classwise_conf_thresholds", {}))}')
     print(f'Tracking enabled: {tracking_cfg["enabled"]}')
     if tracking_cfg['enabled']:
         print(f"Appearance association enabled: {tracking_cfg['association']['use_appearance'] and tracking_cfg['appearance']['enabled']}")
+        scene_context = resolve_tracking_scene_context(tracking_cfg)
+        scene_adaptive_requested = bool(
+            tracking_cfg.get('modality', {}).get('use_scene_adaptation', False)
+            and tracking_cfg.get('association', {}).get('use_modality_awareness', False)
+            and tracking_cfg.get('association', {}).get('dynamic_weighting', False)
+        )
+        if scene_adaptive_requested and scene_context:
+            scene_desc = ', '.join(f'{key}={scene_context[key]}' for key in SCENE_CONTEXT_KEYS if key in scene_context)
+            print(f'Scene-adaptive weighting: enabled ({scene_desc})')
+        elif scene_adaptive_requested:
+            print('Scene-adaptive weighting: enabled but no scene context provided; falling back to reliability-only dynamic weighting.')
+        else:
+            print('Scene-adaptive weighting: off')
+    else:
+        scene_context = {}
 
     model = build_model(cfg.model).to(device)
     model.load_state_dict(torch.load(args.weights, map_location=device))
@@ -341,11 +390,12 @@ def main():
             tracking_cfg=tracking_cfg,
         )
         preds = project_predictions_to_original(preds, scale_ratio, dw, dh)
-        frame_meta = {
-            'frame_index': frame_index,
-            'image_id': rgb_path.name,
-            'sequence_id': rgb_path.parent.name if sequence_mode else 'single_sequence',
-        }
+        frame_meta = build_tracking_frame_meta(
+            frame_index,
+            rgb_path,
+            sequence_mode=sequence_mode,
+            scene_context=scene_context,
+        )
         refinement_payload = None
         refinement_summary = None
         if refiner is not None:
@@ -404,8 +454,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

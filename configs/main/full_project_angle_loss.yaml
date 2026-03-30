@@ -1,0 +1,17 @@
+base_configs:
+  - 'full_project.yaml'
+
+experiment:
+  name: 'full_project_angle_loss'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal training variant for auxiliary OBB angle supervision.
+# ProbIoU box regression remains the main geometric loss; the angle term is a
+# lightweight wrapped-angle auxiliary loss and stays isolated from TTA /
+# classwise thresholds / robustness / tracking settings.
+loss:
+  angle_enabled: True
+  angle_weight: 0.2
+  angle_type: 'wrapped_smooth_l1'
+  angle_beta: 0.1

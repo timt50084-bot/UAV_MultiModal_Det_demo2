@@ -1,0 +1,17 @@
+base_configs:
+  - 'full_project.yaml'
+
+experiment:
+  name: 'full_project_robustness'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal validation variant for cross-modal robustness reporting.
+# This keeps the default inference path unchanged and only enables the
+# RGB-drop / IR-drop evaluation passes in tools/val.py.
+eval:
+  cross_modal_robustness:
+    enabled: True
+    base_metric: 'mAP_50'
+    rgb_drop_mode: 'zero'
+    ir_drop_mode: 'zero'

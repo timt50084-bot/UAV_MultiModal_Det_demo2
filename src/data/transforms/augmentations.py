@@ -233,10 +233,10 @@ class SensorDegradationAug:
 
         return self._clip_uint8(out)
 
-    def _apply_ir_degradation(self, image, config, frame_seed_offset=0):
+    def _apply_ir_degradation(self, image, config, seed=0, frame_seed_offset=0):
         out = image.astype(np.float32)
         height, width = out.shape[:2]
-        base_seed = int(config['seed']) + int(frame_seed_offset) * 9973
+        base_seed = int(seed) + int(frame_seed_offset) * 9973
         rng = np.random.default_rng(base_seed)
 
         if config['use_drift']:
@@ -266,7 +266,12 @@ class SensorDegradationAug:
         if config is None:
             return img_rgb, img_ir
         img_rgb = self._apply_rgb_degradation(img_rgb, config['rgb'])
-        img_ir = self._apply_ir_degradation(img_ir, config['ir'], frame_seed_offset=frame_seed_offset)
+        img_ir = self._apply_ir_degradation(
+            img_ir,
+            config['ir'],
+            seed=config.get('seed', 0),
+            frame_seed_offset=frame_seed_offset,
+        )
         return img_rgb, img_ir
 
     def __call__(self, img_rgb, img_ir):

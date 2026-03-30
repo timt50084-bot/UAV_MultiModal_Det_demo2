@@ -56,6 +56,49 @@ def main():
     )
     for warning in cfg_meta.get('warnings', []):
         print(f'[Config Warning] {warning}')
+    aug_cfg = cfg.get('dataset', {}).get('aug_cfg', {}) if hasattr(cfg, 'get') else {}
+    misalignment_cfg = aug_cfg.get('cross_modal_misalignment', {}) if hasattr(aug_cfg, 'get') else {}
+    if misalignment_cfg and misalignment_cfg.get('enabled', False):
+        print(
+            'Cross-modal misalignment aug: '
+            f"enabled (prob={float(misalignment_cfg.get('prob', 0.0)):.2f}, "
+            f"apply_to={misalignment_cfg.get('apply_to', 'ir')}, "
+            f"translate<={float(misalignment_cfg.get('max_translate_ratio', 0.0)):.3f}, "
+            f"rotate<={float(misalignment_cfg.get('max_rotate_deg', 0.0)):.2f}deg, "
+            f"scale_delta<={float(misalignment_cfg.get('max_scale_delta', 0.0)):.3f})"
+        )
+    else:
+        print('Cross-modal misalignment aug: off')
+    sensor_degradation_cfg = aug_cfg.get('sensor_degradation', {}) if hasattr(aug_cfg, 'get') else {}
+    if sensor_degradation_cfg and sensor_degradation_cfg.get('enabled', False):
+        rgb_cfg = sensor_degradation_cfg.get('rgb', {}) if hasattr(sensor_degradation_cfg, 'get') else {}
+        ir_cfg = sensor_degradation_cfg.get('ir', {}) if hasattr(sensor_degradation_cfg, 'get') else {}
+        print(
+            'Sensor degradation aug: '
+            f"enabled (prob={float(sensor_degradation_cfg.get('prob', 0.0)):.2f}, "
+            f"rgb[max_gain={float(rgb_cfg.get('max_exposure_gain', 0.0)):.2f}, "
+            f"flare_p={float(rgb_cfg.get('flare_prob', 0.0)):.2f}, "
+            f"haze_p={float(rgb_cfg.get('haze_prob', 0.0)):.2f}], "
+            f"ir[noise_std={float(ir_cfg.get('noise_std', 0.0)):.3f}, "
+            f"max_drift={float(ir_cfg.get('max_drift', 0.0)):.3f}, "
+            f"hotspot_p={float(ir_cfg.get('hotspot_prob', 0.0)):.2f}, "
+            f"stripe_p={float(ir_cfg.get('stripe_prob', 0.0)):.2f}])"
+        )
+    else:
+        print('Sensor degradation aug: off')
+    loss_cfg = cfg.get('loss', {}) if hasattr(cfg, 'get') else {}
+    angle_enabled = bool(loss_cfg.get('angle_enabled', False)) if hasattr(loss_cfg, 'get') else False
+    angle_weight = float(loss_cfg.get('angle_weight', 0.0)) if hasattr(loss_cfg, 'get') else 0.0
+    if angle_enabled and angle_weight > 0.0:
+        print(
+            'Angle loss: '
+            f"enabled (type={loss_cfg.get('angle_type', 'wrapped_smooth_l1')}, "
+            f"weight={angle_weight:.3f}, beta={float(loss_cfg.get('angle_beta', 0.1)):.3f})"
+        )
+    elif angle_enabled:
+        print('Angle loss: configured but inactive (weight=0.0, legacy-equivalent)')
+    else:
+        print('Angle loss: off')
     set_seed(42)
 
     if device.type == 'cuda':

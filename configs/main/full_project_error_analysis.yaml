@@ -1,0 +1,22 @@
+base_configs:
+  - 'full_project.yaml'
+
+experiment:
+  name: 'full_project_error_analysis'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal validation variant for detection-side error analysis.
+# Keeps the default inference path unchanged and only enables the detector
+# error-analysis export block in tools/val.py / Evaluator.
+eval:
+  error_analysis:
+    enabled: True
+    output_dir: 'outputs/error_analysis/full_project_error_analysis'
+    export_json: True
+    export_csv: True
+    include_per_image: True
+    confusion:
+      enabled: True
+    modality_contribution:
+      enabled: False

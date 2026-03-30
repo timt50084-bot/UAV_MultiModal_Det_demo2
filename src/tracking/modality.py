@@ -13,10 +13,16 @@ MODALITY_DEFAULTS = {
     'reliability_ema': 0.8,
     'night_motion_boost': 0.2,
     'fog_temporal_boost': 0.2,
+    'scene_context': {
+        'time_of_day': '',
+        'weather': '',
+        'visibility': '',
+    },
 }
 
 NIGHT_TOKENS = {'night', 'dark', 'low_light', 'evening'}
 FOG_TOKENS = {'fog', 'foggy', 'mist', 'haze', 'smog', 'low_visibility'}
+LOW_VISIBILITY_TOKENS = {'low', 'poor', 'bad', 'limited', 'reduced', 'low_visibility'}
 DAY_TOKENS = {'day', 'daytime', 'sunny', 'bright', 'strong_light'}
 
 
@@ -354,10 +360,11 @@ def compute_dynamic_weight_profile(association_cfg, modality_cfg, detection_reli
 def _extract_scene_summary(frame_meta=None):
     metadata = frame_meta if isinstance(frame_meta, dict) else {}
     time_of_day = str(metadata.get('time_of_day', '') or '').strip().lower()
-    weather = str(metadata.get('weather', '') or metadata.get('visibility', '') or '').strip().lower()
+    weather = str(metadata.get('weather', '') or '').strip().lower()
+    visibility = str(metadata.get('visibility', '') or '').strip().lower()
     return {
         'night': any(token in time_of_day for token in NIGHT_TOKENS),
-        'fog': any(token in weather for token in FOG_TOKENS),
+        'fog': any(token in weather for token in FOG_TOKENS) or any(token in visibility for token in LOW_VISIBILITY_TOKENS),
         'day': any(token in time_of_day for token in DAY_TOKENS),
     }
 

@@ -202,11 +202,12 @@ class Trainer:
         print(
             f"{prefix} loss cls={loss_components['cls']:.6f} "
             f"box={loss_components['box']:.6f} "
+            f"angle={loss_components['angle']:.6f} "
             f"contrastive={loss_components['contrastive']:.6f} "
             f"temporal={loss_components['temporal']:.6f} "
             f"total={loss_total_raw.detach().item():.6f} "
             f"backward_loss={loss_for_backward.detach().item():.6f} "
-            f"dfl=n/a angle=n/a(box term uses ProbIoU OBB)"
+            f"dfl=n/a"
         )
         print(
             f"{prefix} tensor dtype={loss_for_backward.dtype} device={loss_for_backward.device} "
@@ -280,6 +281,7 @@ class Trainer:
             pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
             self.optimizer.zero_grad()
             total_loss_epoch = None
+            total_angle_epoch = None
             timing_profile = TrainTimingProfile(enabled=self.profile_train, max_iters=self.profile_iters)
             last_iter_end = time.perf_counter()
 
@@ -348,7 +350,7 @@ class Trainer:
                         matched_pred_box = pred_bboxes[pos_mask]
                         matched_tgt_cls = target_labels[pos_mask]
                         matched_tgt_box = target_bboxes[pos_mask]
-                        loss_total_raw, loss_cls, loss_reg = self.criterion(
+                        loss_total_raw, loss_cls, loss_reg, loss_angle = self.criterion(
                             matched_pred_cls,
                             matched_pred_box,
                             matched_tgt_cls,
@@ -361,6 +363,7 @@ class Trainer:
                     else:
                         loss_cls = zero_term
                         loss_reg = zero_term
+                        loss_angle = zero_term
                         loss_total_raw = zero_term + contrastive_loss + temporal_loss
                         zero_pos_reason = (
                             'assigner returned zero positives for a non-empty GT batch'
@@ -390,6 +393,7 @@ class Trainer:
                     loss_components = {
                         'cls': float(loss_cls.detach().item()),
                         'box': float(loss_reg.detach().item()),
+                        'angle': float(loss_angle.detach().item()),
                         'contrastive': float(contrastive_loss.detach().item()),
                         'temporal': float(temporal_loss.detach().item()),
                     }
@@ -426,14 +430,20 @@ class Trainer:
 
                 batch_loss = loss_total.detach() * self.accumulate
                 total_loss_epoch = batch_loss if total_loss_epoch is None else total_loss_epoch + batch_loss
+                batch_angle = loss_angle.detach()
+                total_angle_epoch = batch_angle if total_angle_epoch is None else total_angle_epoch + batch_angle
                 should_log = ((i + 1) % self.progress_log_interval == 0) or ((i + 1) == len(self.train_loader))
                 if should_log and total_loss_epoch is not None:
                     avg_loss = total_loss_epoch.item() / (i + 1)
-                    pbar.set_postfix({
+                    postfix = {
                         "Loss": self._format_loss_for_display(avg_loss),
                         "Pos": num_pos,
                         "GT": batch_gt_count,
-                    })
+                    }
+                    if getattr(self.criterion, 'angle_enabled', False) and getattr(self.criterion, 'angle_weight', 0.0) > 0.0:
+                        avg_angle = 0.0 if total_angle_epoch is None else total_angle_epoch.item() / (i + 1)
+                        postfix["Angle"] = self._format_loss_for_display(avg_angle)
+                    pbar.set_postfix(postfix)
 
                 if profile_iter:
                     iter_end = self._profile_stamp()

@@ -2,9 +2,9 @@
 
 This script intentionally reuses the existing preprocessing helpers in
 `src.data.transforms.preprocess` for:
-- joint valid-region cropping
 - XML to YOLO OBB conversion
 - RGB / IR label fusion
+- optional crop strategy selection between fixed crop and DM-SOP content-aware crop
 
 Training-time augmentation is intentionally not part of this script.
 """
@@ -25,6 +25,7 @@ if __package__ in {None, ''}:
 
 from src.data.transforms.preprocess import (  # noqa: E402
     cmlc_nms_fusion,
+    get_dm_sop_crop_bbox,
     parse_xml_to_yolo_obb,
 )
 
@@ -62,7 +63,11 @@ IR_LABEL_DIR_CANDIDATES = {
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Prepare raw DroneVehicle data into the DroneDualDataset directory structure.'
+        description=(
+            'Prepare raw DroneVehicle data into the DroneDualDataset directory structure. '
+            'The default crop strategy keeps the current fixed crop; use dm_sop to enable '
+            'joint content-aware RGB/IR cropping.'
+        )
     )
     parser.add_argument(
         '--raw-root',
@@ -89,22 +94,32 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--rgb-label-dir', type=str, default='', help='Optional explicit raw RGB XML directory.')
     parser.add_argument('--ir-label-dir', type=str, default='', help='Optional explicit raw IR XML directory.')
     parser.add_argument(
+        '--crop-strategy',
+        type=str,
+        default='fixed',
+        choices=['fixed', 'dm_sop'],
+        help=(
+            'Crop strategy for raw RGB/IR pairs. `fixed` preserves the current fixed crop '
+            'behavior; `dm_sop` uses joint content-aware RGB/IR cropping with XML-aware padding.'
+        ),
+    )
+    parser.add_argument(
         '--low-tol',
         type=int,
         default=10,
-        help='Near-black fallback threshold for valid-content masking.',
+        help='Near-black fallback threshold for DM-SOP valid-content masking.',
     )
     parser.add_argument(
         '--high-tol',
         type=int,
         default=245,
-        help='Near-white threshold for valid-content masking.',
+        help='Near-white threshold for DM-SOP valid-content masking.',
     )
     parser.add_argument(
         '--padding',
         type=int,
         default=0,
-        help='XML-aware safety padding added around the detected real-content crop box.',
+        help='XML-aware safety padding added around the detected DM-SOP crop box.',
     )
     parser.add_argument('--log-level', type=str, default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'])
     return parser
@@ -217,6 +232,60 @@ def _get_fixed_crop_bounds(image_width: int, image_height: int) -> Sequence[int]
     return FIXED_CROP_LEFT, FIXED_CROP_TOP, FIXED_CROP_RIGHT - 1, FIXED_CROP_BOTTOM - 1
 
 
+def _resolve_crop_bounds(
+    img_rgb,
+    img_ir,
+    rgb_xml_path: Path,
+    ir_xml_path: Path,
+    crop_strategy: str,
+    low_tol: int,
+    high_tol: int,
+    padding: int,
+):
+    full_width = int(img_rgb.shape[1])
+    full_height = int(img_rgb.shape[0])
+
+    if crop_strategy == 'fixed':
+        fallback = False
+        try:
+            x_min, y_min, x_max, y_max = _get_fixed_crop_bounds(full_width, full_height)
+        except ValueError as exc:
+            logging.warning('Crop skipped for sample due to fixed crop bounds (%s); using full image.', exc)
+            x_min, y_min = 0, 0
+            x_max, y_max = full_width - 1, full_height - 1
+            fallback = True
+    elif crop_strategy == 'dm_sop':
+        fallback = False
+        try:
+            x_min, y_min, x_max, y_max = get_dm_sop_crop_bbox(
+                img_rgb,
+                img_ir,
+                rgb_xml_path,
+                ir_xml_path,
+                low_tol=low_tol,
+                high_tol=high_tol,
+                padding=padding,
+            )
+        except ValueError as exc:
+            logging.warning('DM-SOP crop failed for sample (%s); using full image.', exc)
+            x_min, y_min = 0, 0
+            x_max, y_max = full_width - 1, full_height - 1
+            fallback = True
+    else:
+        raise ValueError(f'Unsupported crop strategy: {crop_strategy}')
+
+    x_min = max(0, int(x_min))
+    y_min = max(0, int(y_min))
+    x_max = min(int(x_max), full_width - 1)
+    y_max = min(int(y_max), full_height - 1)
+    if x_max <= x_min or y_max <= y_min:
+        x_min, y_min = 0, 0
+        x_max, y_max = full_width - 1, full_height - 1
+        fallback = True
+
+    return x_min, y_min, x_max, y_max, fallback
+
+
 def _resolve_split_sources(
     raw_root: Path,
     split: str,
@@ -273,6 +342,7 @@ def prepare_split(
     low_tol: int = 10,
     high_tol: int = 245,
     padding: int = 0,
+    crop_strategy: str = 'fixed',
 ) -> Dict[str, object]:
     sources = _resolve_split_sources(
         raw_root=raw_root,
@@ -296,6 +366,7 @@ def prepare_split(
         'rgb_label_dir': '' if sources['rgb_label_dir'] is None else str(sources['rgb_label_dir']),
         'ir_label_dir': '' if sources['ir_label_dir'] is None else str(sources['ir_label_dir']),
         'rgb_ir_same_dir': bool(sources.get('rgb_ir_same_dir', False)),
+        'crop_strategy': crop_strategy,
         'found_rgb_images': len(rgb_index),
         'found_ir_images': len(ir_index),
         'processed_pairs': 0,
@@ -316,6 +387,7 @@ def prepare_split(
     logging.info('  RGB label dir: %s', sources['rgb_label_dir'])
     logging.info('  IR label dir: %s', sources['ir_label_dir'])
     logging.info('  RGB/IR same dir: %s', summary['rgb_ir_same_dir'])
+    logging.info('  Crop strategy: %s', crop_strategy)
 
     if summary['rgb_ir_same_dir']:
         summary['warnings'] += 1
@@ -344,28 +416,18 @@ def prepare_split(
 
         full_width = img_rgb.shape[1]
         full_height = img_rgb.shape[0]
-        fallback = False
-        try:
-            x_min, y_min, x_max, y_max = _get_fixed_crop_bounds(full_width, full_height)
-        except ValueError as exc:
-            logging.warning('Crop skipped for sample `%s` (%s); using full image.', stem, exc)
-            summary['warnings'] += 1
-            x_min, y_min = 0, 0
-            x_max, y_max = full_width - 1, full_height - 1
-            fallback = True
-
-        x_min = max(0, int(x_min))
-        y_min = max(0, int(y_min))
-        x_max = min(int(x_max), full_width - 1)
-        y_max = min(int(y_max), full_height - 1)
-        if x_max <= x_min or y_max <= y_min:
-            x_min, y_min = 0, 0
-            x_max, y_max = full_width - 1, full_height - 1
-            fallback = True
-
-        if x_min == 0 and y_min == 0 and x_max == full_width - 1 and y_max == full_height - 1:
-            fallback = True
+        x_min, y_min, x_max, y_max, fallback = _resolve_crop_bounds(
+            img_rgb=img_rgb,
+            img_ir=img_ir,
+            rgb_xml_path=rgb_xml_path,
+            ir_xml_path=ir_xml_path,
+            crop_strategy=crop_strategy,
+            low_tol=low_tol,
+            high_tol=high_tol,
+            padding=padding,
+        )
         if fallback:
+            summary['warnings'] += 1
             summary['crop_fallbacks'] += 1
 
         cropped_rgb = img_rgb[y_min:y_max + 1, x_min:x_max + 1]
@@ -428,6 +490,7 @@ def prepare_dataset(
     low_tol: int = 10,
     high_tol: int = 245,
     padding: int = 0,
+    crop_strategy: str = 'fixed',
 ) -> Dict[str, object]:
     raw_root_path = Path(raw_root)
     output_root_path = Path(output_root)
@@ -437,6 +500,7 @@ def prepare_dataset(
     overall = {
         'raw_root': str(raw_root_path),
         'output_root': str(output_root_path),
+        'crop_strategy': crop_strategy,
         'splits': {},
         'total_processed_pairs': 0,
         'total_warnings': 0,
@@ -459,6 +523,7 @@ def prepare_dataset(
             low_tol=low_tol,
             high_tol=high_tol,
             padding=padding,
+            crop_strategy=crop_strategy,
         )
         overall['splits'][split] = split_summary
         overall['total_processed_pairs'] += int(split_summary['processed_pairs'])
@@ -488,6 +553,7 @@ def main() -> None:
         low_tol=args.low_tol,
         high_tol=args.high_tol,
         padding=args.padding,
+        crop_strategy=args.crop_strategy,
     )
     logging.info('Dataset preparation summary\n%s', json.dumps(summary, ensure_ascii=False, indent=2))
 

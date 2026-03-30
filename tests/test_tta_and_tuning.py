@@ -47,6 +47,21 @@ class TTAAndTuningTestCase(unittest.TestCase):
         self.assertEqual(filtered.shape[0], 1)
         self.assertEqual(int(filtered[0, 6].item()), 0)
 
+    def test_empty_classwise_thresholds_preserve_legacy_behavior(self):
+        preds = torch.tensor([
+            [10.0, 10.0, 8.0, 8.0, 0.0, 0.35, 0.0],
+            [12.0, 12.0, 8.0, 8.0, 0.0, 0.40, 1.0],
+        ], dtype=torch.float32)
+
+        filtered = apply_classwise_thresholds(
+            preds,
+            class_names=['car', 'truck'],
+            global_conf_threshold=0.30,
+            classwise_conf_thresholds={},
+        )
+
+        self.assertTrue(torch.equal(filtered, preds))
+
     def test_fast_mode_backward_compatible(self):
         infer_cfg = normalize_infer_cfg({}, default_imgsz=640, nms_cfg={'conf_thres': 0.001, 'iou_thres': 0.45, 'max_det': 300})
 
@@ -80,6 +95,56 @@ class TTAAndTuningTestCase(unittest.TestCase):
         )
         transforms = build_tta_transforms(infer_cfg, 640)
         self.assertEqual(len(transforms), 4)
+
+    def test_explicit_tta_can_be_enabled_while_fast_mode_stays_selected(self):
+        infer_cfg = normalize_infer_cfg(
+            {
+                'mode': 'fast',
+                'classwise_conf_thresholds': {},
+                'multi_scale': {'enabled': True, 'sizes': [640, 768, 896]},
+                'tta': {'enabled': True, 'horizontal_flip': True},
+                'merge': {'method': 'nms', 'iou_threshold': 0.55, 'max_det': 300},
+            },
+            default_imgsz=640,
+            nms_cfg={'conf_thres': 0.25, 'iou_thres': 0.45, 'max_det': 300},
+        )
+
+        self.assertEqual(infer_cfg['mode'], 'fast')
+        self.assertTrue(infer_cfg['enabled'])
+        self.assertTrue(infer_cfg['multi_scale']['enabled'])
+        self.assertTrue(infer_cfg['tta']['enabled'])
+        self.assertTrue(infer_cfg['tta']['horizontal_flip'])
+        self.assertEqual(infer_cfg['classwise_conf_thresholds'], {})
+
+    def test_results_oriented_mainline_configs_enable_only_classwise_thresholds(self):
+        for config_path, experiment_name in [
+            ('configs/main/full_project_results.yaml', 'full_project_results'),
+            ('configs/main/tracking_final_results.yaml', 'tracking_final_results'),
+        ]:
+            cfg = load_config(config_path)
+            infer_cfg = normalize_infer_cfg(cfg.infer, default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)
+
+            self.assertEqual(cfg.experiment.name, experiment_name)
+            self.assertEqual(infer_cfg['mode'], 'fast')
+            self.assertFalse(infer_cfg['tta']['enabled'])
+            self.assertFalse(infer_cfg['multi_scale']['enabled'])
+            self.assertIn('car', infer_cfg['classwise_conf_thresholds'])
+
+    def test_formal_tta_mainline_configs_enable_tta_without_classwise_thresholds(self):
+        for config_path, experiment_name in [
+            ('configs/main/full_project_tta.yaml', 'full_project_tta'),
+            ('configs/main/tracking_final_tta.yaml', 'tracking_final_tta'),
+        ]:
+            cfg = load_config(config_path)
+            infer_cfg = normalize_infer_cfg(cfg.infer, default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)
+
+            self.assertEqual(cfg.experiment.name, experiment_name)
+            self.assertEqual(infer_cfg['mode'], 'fast')
+            self.assertTrue(infer_cfg['multi_scale']['enabled'])
+            self.assertEqual(infer_cfg['multi_scale']['sizes'], [640, 768, 896])
+            self.assertTrue(infer_cfg['tta']['enabled'])
+            self.assertTrue(infer_cfg['tta']['horizontal_flip'])
+            self.assertEqual(infer_cfg['classwise_conf_thresholds'], {})
 
 
 if __name__ == '__main__':

@@ -61,7 +61,39 @@ def normalize_infer_cfg(infer_cfg=None, default_imgsz=1024, nms_cfg=None):
     }
 
 
+def describe_classwise_thresholds(classwise_conf_thresholds=None):
+    classwise_conf_thresholds = classwise_conf_thresholds or {}
+    normalized = {str(key): float(value) for key, value in classwise_conf_thresholds.items()}
+    if not normalized:
+        return 'off (global confidence threshold only)'
+    items = ', '.join(f'{key}={value:.2f}' for key, value in normalized.items())
+    return f'enabled ({items})'
+
+
+def describe_tta_settings(infer_cfg=None):
+    infer_cfg = infer_cfg or {}
+    multi_scale_cfg = infer_cfg.get('multi_scale', {}) or {}
+    tta_cfg = infer_cfg.get('tta', {}) or {}
+    merge_cfg = infer_cfg.get('merge', {}) or {}
+
+    multi_scale_enabled = bool(multi_scale_cfg.get('enabled', False))
+    horizontal_flip = bool(tta_cfg.get('enabled', False) and tta_cfg.get('horizontal_flip', False))
+    if not multi_scale_enabled and not horizontal_flip:
+        return 'off (single-scale inference)'
+
+    sizes = multi_scale_cfg.get('sizes') or []
+    size_desc = ','.join(str(int(size)) for size in sizes) if multi_scale_enabled and sizes else 'base'
+    merge_method = str(merge_cfg.get('method', 'nms')).lower()
+    merge_iou = float(merge_cfg.get('iou_threshold', 0.55))
+    return f'enabled (sizes={size_desc}; horizontal_flip={horizontal_flip}; merge={merge_method}@{merge_iou:.2f})'
+
+
 def apply_classwise_thresholds(preds, class_names, global_conf_threshold, classwise_conf_thresholds=None):
+    """Apply optional per-class confidence overrides after NMS/merge.
+
+    Mainline configs are expected to use dataset class names as dictionary keys.
+    If the mapping is empty, this reduces to the legacy global-threshold behavior.
+    """
     if preds is None or len(preds) == 0:
         if torch.is_tensor(preds):
             return preds[:0]

@@ -72,6 +72,7 @@ def main():
         dynamic_axes=dynamic_axes, opset_version=args.opset, do_constant_folding=True
     )
     print(f"ONNX export succeeded: {export_path}")
+    print('ONNX interface: inputs=(images_rgb, images_ir), outputs=(outputs flat predictions before Python-side OBB NMS)')
 
     try:
         import onnx

@@ -102,3 +102,30 @@ def normalize_eval_metrics_cfg(cfg):
         'group_eval': group_eval,
         'error_analysis': error_analysis,
     }
+
+
+def describe_cross_modal_robustness(cfg=None):
+    cfg = dict(cfg or {})
+    if not cfg.get('enabled', False):
+        return 'off (baseline validation only)'
+    base_metric = str(cfg.get('base_metric', 'mAP_50'))
+    rgb_drop_mode = str(cfg.get('rgb_drop_mode', 'zero'))
+    ir_drop_mode = str(cfg.get('ir_drop_mode', 'zero'))
+    return (
+        f'enabled (base_metric={base_metric}; '
+        f'rgb_drop={rgb_drop_mode}; ir_drop={ir_drop_mode})'
+    )
+
+
+def describe_detection_error_analysis(cfg=None):
+    cfg = dict(cfg or {})
+    if not cfg.get('enabled', False):
+        return 'off (metrics only)'
+    output_dir = str(cfg.get('output_dir', 'outputs/error_analysis'))
+    export_json = bool(cfg.get('export_json', True))
+    export_csv = bool(cfg.get('export_csv', True))
+    include_per_image = bool(cfg.get('include_per_image', True))
+    return (
+        f'enabled (output_dir={output_dir}; '
+        f'json={export_json}; csv={export_csv}; per_image={include_per_image})'
+    )

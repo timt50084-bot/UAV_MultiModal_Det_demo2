@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import random
 
 import numpy as np
@@ -6,11 +6,17 @@ import torch
 
 from src.data.dataloader import build_dataloader
 from src.engine.evaluator import Evaluator
+from src.metrics.task_metrics import (
+    describe_cross_modal_robustness,
+    describe_detection_error_analysis,
+    normalize_eval_metrics_cfg,
+)
 from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
 from src.tracking import TrackingEvaluator, normalize_tracking_cfg, normalize_tracking_eval_cfg
 from src.utils.config import load_config
 from src.utils.config_utils import apply_experiment_runtime_overrides
+from src.utils.postprocess_tuning import describe_classwise_thresholds, describe_tta_settings, normalize_infer_cfg
 
 
 def set_seed(seed=42):
@@ -105,8 +111,16 @@ def main():
     model = build_model(cfg.model).to(device)
     model.load_state_dict(torch.load(args.weights, map_location=device))
 
-    extra_metrics_cfg = cfg.get('eval', {}) if hasattr(cfg, 'get') else {}
-    infer_cfg = cfg.get('infer', {}) if hasattr(cfg, 'get') else {}
+    extra_metrics_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}) if hasattr(cfg, 'get') else {})
+    infer_cfg = normalize_infer_cfg(
+        cfg.get('infer', {}) if hasattr(cfg, 'get') else {},
+        default_imgsz=cfg.dataset.imgsz,
+        nms_cfg=cfg.val.nms,
+    )
+    print(f'TTA: {describe_tta_settings(infer_cfg)}')
+    print(f'Classwise thresholds: {describe_classwise_thresholds(infer_cfg.get("classwise_conf_thresholds", {}))}')
+    print(f'Cross-modal robustness eval: {describe_cross_modal_robustness(extra_metrics_cfg.get("cross_modal_robustness", {}))}')
+    print(f'Detection error analysis: {describe_detection_error_analysis(extra_metrics_cfg.get("error_analysis", {}))}')
     metrics_evaluator = OBBMetricsEvaluator(num_classes=cfg.model.num_classes, extra_metrics_cfg=extra_metrics_cfg)
     evaluator = Evaluator(
         val_loader,
@@ -179,8 +193,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

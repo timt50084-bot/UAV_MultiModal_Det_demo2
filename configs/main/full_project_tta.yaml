@@ -1,0 +1,25 @@
+base_configs:
+  - 'full_project.yaml'
+
+experiment:
+  name: 'full_project_tta'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal TTA variant for detection / validation.
+# Keeps the default fast mainline untouched and only enables explicit
+# multi-scale + horizontal-flip test-time augmentation.
+infer:
+  mode: 'fast'
+  classwise_conf_thresholds: {}
+  multi_scale:
+    enabled: True
+    sizes: [640, 768, 896]
+  tta:
+    enabled: True
+    horizontal_flip: True
+  merge:
+    # TTA outputs are restored to the base resolution and merged after OBB NMS.
+    method: 'nms'
+    iou_threshold: 0.55
+    max_det: 300

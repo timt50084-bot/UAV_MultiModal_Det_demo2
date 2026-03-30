@@ -45,6 +45,23 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         self.assertEqual(cfg.model.temporal.mode, 'memory')
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
 
+    def test_formal_mainline_variants_load(self):
+        variant_configs = [
+            'configs/main/full_project_results.yaml',
+            'configs/main/full_project_tta.yaml',
+            'configs/main/full_project_robustness.yaml',
+            'configs/main/full_project_misalignment.yaml',
+            'configs/main/full_project_sensor_degradation.yaml',
+            'configs/main/full_project_error_analysis.yaml',
+            'configs/main/full_project_angle_loss.yaml',
+            'configs/main/tracking_final_results.yaml',
+            'configs/main/tracking_final_tta.yaml',
+            'configs/main/tracking_final_scene_adaptive.yaml',
+        ]
+        for config_path in variant_configs:
+            cfg = self._load_and_build(config_path)
+            self.assertIsNotNone(cfg)
+
     def test_legacy_configs_still_load_if_present(self):
         legacy_configs = [
             'configs/exp_reliability_fusion.yaml',

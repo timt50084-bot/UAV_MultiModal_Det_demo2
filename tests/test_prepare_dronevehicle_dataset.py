@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import cv2
 import numpy as np
@@ -304,6 +305,82 @@ class PrepareDroneVehicleDatasetSmokeTestCase(unittest.TestCase):
             val_label = (out_root / 'val' / 'labels' / 'merged' / 'sample.txt').read_text(encoding='utf-8').strip()
             self.assertTrue(train_label)
             self.assertTrue(val_label)
+
+    def test_prepare_dataset_defaults_to_fixed_crop_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            raw_root = tmp_root / 'raw'
+            out_root = tmp_root / 'processed'
+
+            (raw_root / 'train' / 'trainimg').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainimgr').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabel').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabelr').mkdir(parents=True, exist_ok=True)
+
+            rgb = np.full((700, 800, 3), 180, dtype=np.uint8)
+            ir = np.full((700, 800, 3), 120, dtype=np.uint8)
+            cv2.imwrite(str(raw_root / 'train' / 'trainimg' / 'sample.jpg'), rgb)
+            cv2.imwrite(str(raw_root / 'train' / 'trainimgr' / 'sample.jpg'), ir)
+            self._write_sample_xml(raw_root / 'train' / 'trainlabel' / 'sample.xml', cx=220.0, cy=220.0)
+            self._write_sample_xml(raw_root / 'train' / 'trainlabelr' / 'sample.xml', cx=220.0, cy=220.0, angle=0.12)
+
+            summary = prepare_dataset(
+                raw_root=str(raw_root),
+                output_root=str(out_root),
+                splits=['train'],
+                overwrite=False,
+            )
+
+            self.assertEqual(summary['crop_strategy'], 'fixed')
+            self.assertEqual(summary['splits']['train']['crop_strategy'], 'fixed')
+
+            saved_rgb = cv2.imread(str(out_root / 'train' / 'images' / 'img' / 'sample.jpg'))
+            saved_ir = cv2.imread(str(out_root / 'train' / 'images' / 'imgr' / 'sample.jpg'))
+            self.assertEqual(saved_rgb.shape[:2], (512, 640))
+            self.assertEqual(saved_ir.shape[:2], (512, 640))
+
+    def test_prepare_dataset_can_switch_to_dm_sop_crop_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            raw_root = tmp_root / 'raw'
+            out_root = tmp_root / 'processed'
+
+            (raw_root / 'train' / 'trainimg').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainimgr').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabel').mkdir(parents=True, exist_ok=True)
+            (raw_root / 'train' / 'trainlabelr').mkdir(parents=True, exist_ok=True)
+
+            rgb = np.full((700, 800, 3), 180, dtype=np.uint8)
+            ir = np.full((700, 800, 3), 120, dtype=np.uint8)
+            cv2.imwrite(str(raw_root / 'train' / 'trainimg' / 'sample.jpg'), rgb)
+            cv2.imwrite(str(raw_root / 'train' / 'trainimgr' / 'sample.jpg'), ir)
+            self._write_sample_xml(raw_root / 'train' / 'trainlabel' / 'sample.xml', cx=20.0, cy=30.0)
+            self._write_sample_xml(raw_root / 'train' / 'trainlabelr' / 'sample.xml', cx=20.0, cy=30.0, angle=0.12)
+
+            with mock.patch(
+                'tools.prepare_dronevehicle_dataset.get_dm_sop_crop_bbox',
+                return_value=(10, 20, 29, 49),
+            ) as mocked_dm_sop:
+                summary = prepare_dataset(
+                    raw_root=str(raw_root),
+                    output_root=str(out_root),
+                    splits=['train'],
+                    overwrite=False,
+                    crop_strategy='dm_sop',
+                )
+
+            self.assertEqual(summary['crop_strategy'], 'dm_sop')
+            self.assertEqual(summary['splits']['train']['crop_strategy'], 'dm_sop')
+            self.assertEqual(mocked_dm_sop.call_count, 1)
+
+            saved_rgb = cv2.imread(str(out_root / 'train' / 'images' / 'img' / 'sample.jpg'))
+            saved_ir = cv2.imread(str(out_root / 'train' / 'images' / 'imgr' / 'sample.jpg'))
+            self.assertEqual(saved_rgb.shape[:2], (30, 20))
+            self.assertEqual(saved_ir.shape[:2], (30, 20))
+
+            label_path = out_root / 'train' / 'labels' / 'merged' / 'sample.txt'
+            self.assertTrue(label_path.exists())
+            self.assertTrue(label_path.read_text(encoding='utf-8').strip())
 
     def test_polygon_xml_is_converted_to_yolo_obb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

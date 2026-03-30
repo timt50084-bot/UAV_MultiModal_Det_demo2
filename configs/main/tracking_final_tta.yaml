@@ -1,0 +1,24 @@
+base_configs:
+  - 'tracking_final.yaml'
+
+experiment:
+  name: 'tracking_final_tta'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal TTA variant for tracking inference.
+# Detection proposals use explicit multi-scale + horizontal-flip TTA before
+# they are passed into the tracking pipeline. Classwise thresholds stay off.
+infer:
+  mode: 'fast'
+  classwise_conf_thresholds: {}
+  multi_scale:
+    enabled: True
+    sizes: [640, 768, 896]
+  tta:
+    enabled: True
+    horizontal_flip: True
+  merge:
+    method: 'nms'
+    iou_threshold: 0.55
+    max_det: 300

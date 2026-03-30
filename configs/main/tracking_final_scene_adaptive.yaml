@@ -1,0 +1,18 @@
+base_configs:
+  - 'tracking_final.yaml'
+
+experiment:
+  name: 'tracking_final_scene_adaptive'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal tracking variant for scene-adaptive modality weighting.
+# Edit the scene_context block per sequence; if any field is left blank,
+# tools/infer.py will keep the old reliability-only dynamic weighting path.
+tracking:
+  modality:
+    use_scene_adaptation: True
+    scene_context:
+      time_of_day: 'night'
+      weather: 'fog'
+      visibility: 'low'

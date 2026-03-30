@@ -1,0 +1,21 @@
+base_configs:
+  - 'full_project.yaml'
+
+experiment:
+  name: 'full_project_misalignment'
+  output_root: 'outputs/experiments'
+  enable_unified_dirs: True
+
+# Formal training variant for isolated cross-modal registration-error simulation.
+# This only enables Cross-Modal Misalignment and keeps the existing weather /
+# modality dropout / CMCP / MRRE switches inherited from the mainline config.
+dataset:
+  aug_cfg:
+    cross_modal_misalignment:
+      enabled: True
+      prob: 0.2
+      apply_to: 'ir'
+      max_translate_ratio: 0.01
+      max_rotate_deg: 1.5
+      max_scale_delta: 0.02
+      border_mode: 'reflect'

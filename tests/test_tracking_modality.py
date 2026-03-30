@@ -2,6 +2,8 @@
 
 import torch
 
+from src.metrics.task_metrics import normalize_eval_metrics_cfg
+
 from src.tracking import (
     TrackingErrorAnalyzer,
     compute_dynamic_weight_profile,
@@ -10,6 +12,8 @@ from src.tracking import (
 )
 from src.tracking.track import Track
 from src.utils.config import load_config
+from src.utils.postprocess_tuning import normalize_infer_cfg
+from tools.infer import build_tracking_frame_meta, resolve_tracking_scene_context
 
 
 class TrackingModalityTestCase(unittest.TestCase):
@@ -169,6 +173,16 @@ class TrackingModalityTestCase(unittest.TestCase):
         self.assertTrue(night_profile['scene_adapted'])
         self.assertGreater(night_profile['w_temporal'], base_profile['w_temporal'])
 
+    def test_visibility_only_scene_context_can_trigger_scene_adaptation(self):
+        visibility_profile = compute_dynamic_weight_profile(
+            self.cfg['association'],
+            self.cfg['modality'],
+            detection_reliability={'rgb_reliability': 0.6, 'ir_reliability': 0.4, 'fused_reliability': 0.6},
+            track_reliability={'rgb_reliability': 0.6, 'ir_reliability': 0.4, 'fused_reliability': 0.6},
+            frame_meta={'visibility': 'low'},
+        )
+        self.assertTrue(visibility_profile['scene_adapted'])
+
     def test_tracking_modality_config_loads(self):
         cfg = load_config('configs/exp_tracking_modality.yaml')
         self.assertTrue(cfg.tracking.enabled)
@@ -177,6 +191,56 @@ class TrackingModalityTestCase(unittest.TestCase):
         self.assertTrue(cfg.tracking.modality.enabled)
         self.assertTrue(cfg.tracking.association.use_modality_awareness)
         self.assertTrue(cfg.tracking.association.dynamic_weighting)
+
+    def test_tracking_final_default_keeps_scene_adaptation_disabled(self):
+        cfg = load_config('configs/main/tracking_final.yaml')
+        self.assertFalse(cfg.tracking.modality.use_scene_adaptation)
+
+    def test_formal_scene_adaptive_config_loads_without_enabling_other_eval_or_infer_features(self):
+        cfg = load_config('configs/main/tracking_final_scene_adaptive.yaml')
+        infer_cfg = normalize_infer_cfg(cfg.get('infer', {}), default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)
+        eval_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}))
+
+        self.assertEqual(cfg.experiment.name, 'tracking_final_scene_adaptive')
+        self.assertTrue(cfg.tracking.modality.use_scene_adaptation)
+        self.assertEqual(cfg.tracking.modality.scene_context.time_of_day, 'night')
+        self.assertEqual(cfg.tracking.modality.scene_context.weather, 'fog')
+        self.assertEqual(cfg.tracking.modality.scene_context.visibility, 'low')
+        self.assertFalse(infer_cfg['multi_scale']['enabled'])
+        self.assertFalse(infer_cfg['tta']['enabled'])
+        self.assertEqual(infer_cfg['classwise_conf_thresholds'], {})
+        self.assertFalse(eval_cfg['cross_modal_robustness']['enabled'])
+        self.assertFalse(eval_cfg['error_analysis']['enabled'])
+
+    def test_tracking_frame_meta_includes_scene_context_when_provided(self):
+        scene_context = resolve_tracking_scene_context(
+            {
+                'modality': {
+                    'scene_context': {
+                        'time_of_day': 'night',
+                        'weather': 'fog',
+                        'visibility': 'low',
+                    }
+                }
+            }
+        )
+        frame_meta = build_tracking_frame_meta(3, 'D:/frames/seqA/000003.jpg', sequence_mode=True, scene_context=scene_context)
+
+        self.assertEqual(frame_meta['frame_index'], 3)
+        self.assertEqual(frame_meta['image_id'], '000003.jpg')
+        self.assertEqual(frame_meta['sequence_id'], 'seqA')
+        self.assertEqual(frame_meta['time_of_day'], 'night')
+        self.assertEqual(frame_meta['weather'], 'fog')
+        self.assertEqual(frame_meta['visibility'], 'low')
+
+    def test_tracking_frame_meta_safe_fallback_without_scene_context(self):
+        scene_context = resolve_tracking_scene_context({'modality': {'scene_context': {'time_of_day': '', 'weather': '', 'visibility': ''}}})
+        frame_meta = build_tracking_frame_meta(0, 'D:/frames/seqA/000000.jpg', sequence_mode=True, scene_context=scene_context)
+
+        self.assertEqual(scene_context, {})
+        self.assertNotIn('time_of_day', frame_meta)
+        self.assertNotIn('weather', frame_meta)
+        self.assertNotIn('visibility', frame_meta)
 
     def test_modality_helped_reactivation_summary(self):
         fake_eval_result = {

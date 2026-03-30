@@ -29,6 +29,36 @@ dataset:
     enable_mrre: True
     enable_weather: True
     enable_modality_dropout: True
+    cross_modal_misalignment:
+      # Simulate a mild RGB/IR registration error on one modality without
+      # changing labels. Disabled by default to preserve current training.
+      # apply_to supports: 'rgb', 'ir', or 'random'.
+      enabled: False
+      prob: 0.0
+      apply_to: 'ir'
+      max_translate_ratio: 0.01
+      max_rotate_deg: 1.5
+      max_scale_delta: 0.02
+      border_mode: 'reflect'
+    sensor_degradation:
+      # Simulate modality-specific sensor degradation without changing labels.
+      # RGB can apply overexposure / flare / haze, while IR can apply noise,
+      # low-frequency drift, hotspots, and optional striping. Disabled by
+      # default to preserve the current training behavior.
+      enabled: False
+      prob: 0.0
+      rgb:
+        overexposure_prob: 0.3
+        flare_prob: 0.15
+        haze_prob: 0.1
+        max_exposure_gain: 1.4
+      ir:
+        noise_prob: 0.3
+        noise_std: 0.03
+        drift_prob: 0.2
+        max_drift: 0.08
+        hotspot_prob: 0.15
+        stripe_prob: 0.0
 
 # Detector model
 model:
@@ -55,6 +85,14 @@ loss:
   alpha: 0.25
   gamma: 2.0
   use_scale_weight: True
+  # Optional auxiliary angle supervision for the OBB angle branch.
+  # Disabled by default so the training path stays equivalent to the current
+  # ProbIoU-driven cls/reg baseline. When angle_weight=0, behavior remains
+  # legacy-equivalent even if the flag is left on.
+  angle_enabled: False
+  angle_weight: 0.0
+  angle_type: 'wrapped_smooth_l1'
+  angle_beta: 0.1
 
 # Training and validation
 train:
@@ -86,19 +124,54 @@ val:
     max_det: 300
     max_wh: 4096.0
 
+eval:
+  cross_modal_robustness:
+    # When enabled in validation, the evaluator runs two additional passes:
+    # one with RGB dropped and one with IR dropped. Results are reported via
+    # RGBOnly_mAP50 / IROnly_mAP50 / RGBDrop_mAP50 / IRDrop_mAP50 and the two
+    # CrossModalRobustness_* delta fields. Keeping this disabled preserves the
+    # legacy single baseline validation behavior.
+    enabled: False
+    base_metric: 'mAP_50'
+    rgb_drop_mode: 'zero'
+    ir_drop_mode: 'zero'
+  error_analysis:
+    # Optional detection-side post-evaluation analysis. When enabled, the
+    # validator keeps normal mAP metrics and additionally exports false
+    # positives / false negatives / class confusion / angle-error summaries.
+    # Disabled by default to preserve the legacy validation path.
+    enabled: False
+    output_dir: 'outputs/error_analysis'
+    export_json: True
+    export_csv: True
+    include_per_image: True
+    confusion:
+      enabled: True
+    modality_contribution:
+      enabled: False
+
 # Inference toolbox
 infer:
   mode: 'fast'
   conf_threshold: null
   iou_threshold: null
+  # Optional per-class confidence overrides applied after OBB NMS / merge.
+  # Mainline configs use dataset.class_names as keys; omitted classes fall back
+  # to the global confidence threshold. An empty dict preserves legacy behavior.
   classwise_conf_thresholds: {}
   multi_scale:
+    # When enabled, tools/infer.py and tools/val.py will run extra square
+    # resolutions and map predictions back to dataset.imgsz before merging.
+    # Keeping this disabled preserves the legacy single-scale fast path.
     enabled: False
     sizes: []
   tta:
+    # When enabled together with horizontal_flip, an extra flipped pass is
+    # evaluated for each active inference size. Disabled keeps legacy behavior.
     enabled: False
     horizontal_flip: False
   merge:
+    # Multi-scale / TTA predictions are merged after OBB NMS using this policy.
     method: 'nms'
     iou_threshold: 0.55
     max_det: 300
@@ -134,11 +207,19 @@ tracking:
     lost_track_expansion: 1.25
   modality:
     enabled: False
+    # Scene-adaptive weighting only affects tracking association when
+    # use_modality_awareness + dynamic_weighting are already active.
+    # If scene_context is empty, the tracker safely falls back to the
+    # reliability-only dynamic weighting path.
     use_scene_adaptation: False
     reliability_source: 'auto'
     reliability_ema: 0.8
     night_motion_boost: 0.2
     fog_temporal_boost: 0.2
+    scene_context:
+      time_of_day: ''
+      weather: ''
+      visibility: ''
   refinement:
     enabled: False
     rescue_low_score: True

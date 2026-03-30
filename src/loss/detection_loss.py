@@ -60,7 +60,8 @@ class ProbIoULoss(nn.Module):
 @LOSSES.register("UAVDualModalLoss")
 class UAVDualModalLoss(nn.Module):
     def __init__(self, num_classes=5, alpha=0.25, gamma=2.0, use_scale_weight=True,
-                 temporal_weight=0.1, temporal_low_motion_bias=0.75):
+                 temporal_weight=0.1, temporal_low_motion_bias=0.75,
+                 angle_enabled=False, angle_weight=0.0, angle_type='wrapped_smooth_l1', angle_beta=0.1):
         super().__init__()
         self.nc = num_classes
         self.use_scale_weight = use_scale_weight
@@ -70,6 +71,10 @@ class UAVDualModalLoss(nn.Module):
         self.gamma = gamma
         self.temporal_weight = temporal_weight
         self.temporal_low_motion_bias = temporal_low_motion_bias
+        self.angle_enabled = bool(angle_enabled)
+        self.angle_weight = float(angle_weight)
+        self.angle_type = str(angle_type)
+        self.angle_beta = float(angle_beta)
 
     def _focal_loss(self, pred_logits, targets):
         bce_loss = self.cls_loss_focal(pred_logits, targets)
@@ -77,6 +82,26 @@ class UAVDualModalLoss(nn.Module):
         p_t = probas * targets + (1 - probas) * (1 - targets)
         focal_weight = (self.alpha * targets + (1 - self.alpha) * (1 - targets)) * ((1 - p_t) ** self.gamma)
         return focal_weight * bce_loss
+
+    @staticmethod
+    def wrapped_angle_difference(pred_theta, target_theta):
+        half_pi = pred_theta.new_tensor(torch.pi * 0.5)
+        pi = pred_theta.new_tensor(torch.pi)
+        return torch.remainder(pred_theta - target_theta + half_pi, pi) - half_pi
+
+    def _compute_angle_loss_raw(self, pred_theta, target_theta):
+        wrapped_delta = self.wrapped_angle_difference(pred_theta, target_theta)
+
+        if self.angle_type == 'wrapped_smooth_l1':
+            return F.smooth_l1_loss(
+                wrapped_delta,
+                torch.zeros_like(wrapped_delta),
+                reduction='none',
+                beta=self.angle_beta,
+            )
+        if self.angle_type == 'sin_cos':
+            return 1.0 - torch.cos(2.0 * wrapped_delta)
+        raise ValueError(f'Unsupported angle loss type: {self.angle_type}')
 
     def forward(self, matched_pred_cls, matched_pred_box, matched_tgt_cls, matched_tgt_box,
                 contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
@@ -105,11 +130,27 @@ class UAVDualModalLoss(nn.Module):
             loss_cls = (loss_cls_raw * scale_weights).sum() / num_pos
             loss_reg = (loss_reg_raw * scale_weights).sum() / num_pos
         else:
+            scale_weights = None
             loss_cls = loss_cls_raw.sum() / num_pos
             loss_reg = loss_reg_raw.sum() / num_pos
+
+        if self.angle_enabled and self.angle_weight > 0.0:
+            loss_angle_raw = self._compute_angle_loss_raw(matched_pred_box[:, 4], matched_tgt_box[:, 4])
+            if scale_weights is not None:
+                loss_angle = (loss_angle_raw * scale_weights).sum() / num_pos
+            else:
+                loss_angle = loss_angle_raw.sum() / num_pos
+        else:
+            loss_angle = matched_pred_box.new_tensor(0.0)
 
         weight_cls = 2.0 if epoch < 5 else 1.0
         weight_reg = 1.0 if epoch < 5 else 2.0
 
-        total_loss = loss_cls * weight_cls + loss_reg * weight_reg + contrastive_loss + temporal_loss
-        return total_loss, loss_cls, loss_reg
+        total_loss = (
+            loss_cls * weight_cls
+            + loss_reg * weight_reg
+            + loss_angle * self.angle_weight
+            + contrastive_loss
+            + temporal_loss
+        )
+        return total_loss, loss_cls, loss_reg, loss_angle
