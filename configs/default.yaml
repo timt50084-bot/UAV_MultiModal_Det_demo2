@@ -73,6 +73,8 @@ performance:
   profile_iters: 50
   profile_cuda: True
   log_interval: 10
+  debug_loss_steps: 0
+  debug_anomaly_steps: 5
   dataloader:
     persistent_workers: True
     prefetch_factor: 2

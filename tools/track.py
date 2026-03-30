@@ -14,6 +14,7 @@ from src.tracking.obb_tracker import OBBTrackletManager
 from src.utils.config import load_config
 
 COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (0, 0, 255)]
+IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
 
 
 def letterbox(img, new_shape=(1024, 1024), color=(114, 114, 114), stride=32):
@@ -82,16 +83,40 @@ def run_model(model, cfg, device, rgb_image, ir_image, prev_rgb_image, prev_ir_i
     return preds.cpu(), r, dw, dh
 
 
+def collect_aligned_frame_pairs(source_rgb_dir, source_ir_dir):
+    rgb_dir = Path(source_rgb_dir)
+    ir_dir = Path(source_ir_dir)
+
+    if not rgb_dir.exists():
+        raise FileNotFoundError(f'RGB frame directory does not exist: {rgb_dir}')
+    if not ir_dir.exists():
+        raise FileNotFoundError(f'IR frame directory does not exist: {ir_dir}')
+    if not rgb_dir.is_dir() or not ir_dir.is_dir():
+        raise FileNotFoundError('source_rgb_dir/source_ir_dir must both be directories with aligned filenames.')
+
+    frame_pairs = []
+    rgb_files = sorted([path for path in rgb_dir.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES])
+    for rgb_file in rgb_files:
+        paired_ir = ir_dir / rgb_file.name
+        if paired_ir.exists() and paired_ir.suffix.lower() in IMAGE_SUFFIXES:
+            frame_pairs.append((rgb_file, paired_ir))
+
+    if not frame_pairs:
+        raise FileNotFoundError(f'No aligned RGB/IR frame pairs found under: {rgb_dir} | {ir_dir}')
+
+    return frame_pairs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Track RGB-IR frame sequences with OBB detections.")
-    parser.add_argument('--config', type=str, default='configs/default.yaml')
-    parser.add_argument('--weights', type=str, required=True)
-    parser.add_argument('--source_rgb_dir', type=str, required=True)
-    parser.add_argument('--source_ir_dir', type=str, required=True)
-    parser.add_argument('--save_dir', type=str, default='outputs/track')
-    parser.add_argument('--device', type=int, default=0)
-    parser.add_argument('--track_iou', type=float, default=0.2)
-    parser.add_argument('--max_age', type=int, default=15)
+    parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
+    parser.add_argument('--weights', type=str, required=True, help='Checkpoint to load for tracking.')
+    parser.add_argument('--source_rgb_dir', type=str, required=True, help='Directory containing RGB frames.')
+    parser.add_argument('--source_ir_dir', type=str, required=True, help='Directory containing IR frames with matching filenames.')
+    parser.add_argument('--save_dir', type=str, default='outputs/track', help='Directory to write visualizations and per-frame txt outputs.')
+    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
+    parser.add_argument('--track_iou', type=float, default=0.2, help='IoU threshold used by the lightweight tracker.')
+    parser.add_argument('--max_age', type=int, default=15, help='Maximum number of missed frames before a track is removed.')
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -105,14 +130,10 @@ def main():
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    rgb_files = sorted([p for p in Path(args.source_rgb_dir).iterdir() if p.suffix.lower() in {'.jpg', '.png', '.jpeg', '.bmp'}])
+    frame_pairs = collect_aligned_frame_pairs(args.source_rgb_dir, args.source_ir_dir)
     prev_rgb_image, prev_ir_image = None, None
 
-    for frame_idx, rgb_path in enumerate(rgb_files):
-        ir_path = Path(args.source_ir_dir) / rgb_path.name
-        if not ir_path.exists():
-            continue
-
+    for frame_idx, (rgb_path, ir_path) in enumerate(frame_pairs):
         rgb_image = cv2.imread(str(rgb_path))
         ir_image = cv2.imread(str(ir_path))
         if rgb_image is None or ir_image is None:

@@ -206,6 +206,11 @@ def collect_frame_pairs(source_rgb, source_ir):
     rgb_path = Path(source_rgb)
     ir_path = Path(source_ir)
 
+    if not rgb_path.exists():
+        raise FileNotFoundError(f'RGB source does not exist: {rgb_path}')
+    if not ir_path.exists():
+        raise FileNotFoundError(f'IR source does not exist: {ir_path}')
+
     if rgb_path.is_dir() and ir_path.is_dir():
         frame_pairs = []
         rgb_files = sorted([path for path in rgb_path.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES])
@@ -213,6 +218,10 @@ def collect_frame_pairs(source_rgb, source_ir):
             paired_ir = ir_path / rgb_file.name
             if paired_ir.exists() and paired_ir.suffix.lower() in IMAGE_SUFFIXES:
                 frame_pairs.append((rgb_file, paired_ir))
+        if not frame_pairs:
+            raise FileNotFoundError(
+                f'No aligned RGB/IR image pairs found under directories: {rgb_path} | {ir_path}'
+            )
         return frame_pairs
 
     if rgb_path.is_file() and ir_path.is_file():
@@ -256,16 +265,16 @@ def draw_result_records(image, results, class_names):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/default.yaml')
-    parser.add_argument('--weights', type=str, required=True)
-    parser.add_argument('--source_rgb', type=str, required=True)
-    parser.add_argument('--source_ir', type=str, required=True)
-    parser.add_argument('--prev_rgb', type=str, default='')
-    parser.add_argument('--prev_ir', type=str, default='')
-    parser.add_argument('--save_dir', type=str, default='outputs/detect')
-    parser.add_argument('--heatmap', action='store_true')
-    parser.add_argument('--device', type=int, default=0)
+    parser = argparse.ArgumentParser(description='Run RGB/IR OBB inference with optional tracking refinement.')
+    parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
+    parser.add_argument('--weights', type=str, required=True, help='Checkpoint to load for inference.')
+    parser.add_argument('--source_rgb', type=str, required=True, help='RGB image file or RGB frame directory.')
+    parser.add_argument('--source_ir', type=str, required=True, help='IR image file or IR frame directory.')
+    parser.add_argument('--prev_rgb', type=str, default='', help='Optional previous RGB frame used to bootstrap temporal inference.')
+    parser.add_argument('--prev_ir', type=str, default='', help='Optional previous IR frame used to bootstrap temporal inference.')
+    parser.add_argument('--save_dir', type=str, default='outputs/detect', help='Directory to write visualizations and optional tracking JSON.')
+    parser.add_argument('--heatmap', action='store_true', help='Save the first available attention heatmap overlay.')
+    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
     args = parser.parse_args()
 
     cfg = load_config(args.config)

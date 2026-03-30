@@ -204,7 +204,7 @@ outputs/experiments/<run_name>/resolved_config.yaml
 
 - 新实验直接使用 `configs/main/*.yaml`。
 - 看到 warning 时，以 `resolved_config.yaml` 为准确认最终生效字段。
-- 部分实验编排脚本输出仍可能显示旧的 `configs/exp_*.yaml` 兼容路径，这是重定向层在工作；手动运行和日常修改时仍建议优先使用 `configs/main/*.yaml`。
+- 实验编排脚本默认也已经使用 `configs/main/*.yaml`；旧的 `configs/exp_*.yaml` 主要只保留给兼容调用。
 
 如需更细的字段说明，可以继续参考 [`configs/CONFIG_GUIDE.md`](configs/CONFIG_GUIDE.md)，但日常上手以本 README 为主即可。
 

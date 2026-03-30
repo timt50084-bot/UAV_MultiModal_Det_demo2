@@ -1,7 +1,5 @@
 # 分布式 DDP 工具
-import torch
 import torch.distributed as dist
-import os
 
 def is_dist_avail_and_initialized():
     """判断是否处于 DDP 分布式环境"""

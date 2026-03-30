@@ -5,7 +5,6 @@ import torch
 
 from src.tracking import MultiObjectTracker, TrackingEvaluator, associate_tracks_to_detections, normalize_tracking_cfg
 from src.tracking.track import Track
-from src.tracking.refinement import TrackAwareRefiner
 from src.utils.config import load_config
 
 

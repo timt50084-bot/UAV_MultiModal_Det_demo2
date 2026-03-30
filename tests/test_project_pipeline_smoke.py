@@ -9,17 +9,17 @@ from tools.summarize_results import collect_project_summary
 
 
 MAIN_CONFIGS = [
-    'configs/exp_baseline.yaml',
-    'configs/exp_fusion_main.yaml',
-    'configs/exp_assigner_main.yaml',
-    'configs/exp_temporal_main.yaml',
-    'configs/exp_full_project.yaml',
-    'configs/exp_tracking_base.yaml',
-    'configs/exp_tracking_assoc.yaml',
-    'configs/exp_tracking_temporal.yaml',
-    'configs/exp_tracking_modality.yaml',
-    'configs/exp_tracking_jointlite.yaml',
-    'configs/exp_tracking_final.yaml',
+    'configs/main/baseline.yaml',
+    'configs/main/fusion_main.yaml',
+    'configs/main/assigner_main.yaml',
+    'configs/main/temporal_main.yaml',
+    'configs/main/full_project.yaml',
+    'configs/main/tracking_base.yaml',
+    'configs/main/tracking_assoc.yaml',
+    'configs/main/tracking_temporal.yaml',
+    'configs/main/tracking_modality.yaml',
+    'configs/main/tracking_jointlite.yaml',
+    'configs/main/tracking_final.yaml',
 ]
 
 DOC_TEMPLATES = [

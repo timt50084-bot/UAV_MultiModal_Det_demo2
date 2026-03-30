@@ -7,7 +7,7 @@ from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm
 
-from src.model.bbox_utils import make_anchors
+from src.model.bbox_utils import make_anchors, normalize_anchor_points
 from src.model.output_adapter import flatten_predictions
 
 
@@ -88,11 +88,14 @@ class Trainer:
         self.profile_train = bool(self.performance_cfg.get('profile_train', False))
         self.profile_iters = max(1, int(self.performance_cfg.get('profile_iters', 50)))
         self.profile_cuda = bool(self.performance_cfg.get('profile_cuda', self.device.type == 'cuda'))
+        self.debug_loss_steps = max(0, int(self.performance_cfg.get('debug_loss_steps', 0)))
+        self.debug_anomaly_steps = max(1, int(self.performance_cfg.get('debug_anomaly_steps', 5)))
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
         self.scaler = GradScaler(enabled=self.use_amp)
         self._anchor_cache = {}
+        self._debug_zero_pos_count = 0
 
         self.current_epoch = 0
         self.current_metrics = None
@@ -118,16 +121,123 @@ class Trainer:
             torch.cuda.synchronize(self.device)
         return time.perf_counter()
 
-    def _get_anchor_points(self, feats_for_anchors, strides):
-        cache_key = tuple(
-            (tuple(feat.shape[-2:]), str(feat.device), str(feat.dtype))
-            for feat in feats_for_anchors
+    def _get_anchor_points(self, feats_for_anchors, strides, input_hw):
+        cache_key = (
+            tuple(
+                (tuple(feat.shape[-2:]), str(feat.device), str(feat.dtype))
+                for feat in feats_for_anchors
+            ),
+            tuple(int(v) for v in input_hw),
         )
         anchor_points = self._anchor_cache.get(cache_key)
         if anchor_points is None:
             anchor_points, _ = make_anchors(feats_for_anchors, strides)
+            anchor_points = normalize_anchor_points(anchor_points, input_hw)
             self._anchor_cache = {cache_key: anchor_points}
         return anchor_points
+
+    def _should_log_zero_pos_debug(self, num_pos):
+        if num_pos != 0:
+            return False
+        if self._debug_zero_pos_count >= self.debug_anomaly_steps:
+            return False
+        self._debug_zero_pos_count += 1
+        return True
+
+    def _collect_grad_debug(self):
+        total_tensors = 0
+        grad_tensors = 0
+        nonzero_grad_tensors = 0
+
+        for parameter in self.model.parameters():
+            if not parameter.requires_grad:
+                continue
+            total_tensors += 1
+            if parameter.grad is None:
+                continue
+
+            grad = parameter.grad.detach().float()
+            grad_tensors += 1
+            if bool(torch.any(grad != 0).item()):
+                nonzero_grad_tensors += 1
+
+        return {
+            'total_tensors': total_tensors,
+            'grad_tensors': grad_tensors,
+            'nonzero_grad_tensors': nonzero_grad_tensors,
+        }
+
+    def _log_loss_debug(
+        self,
+        epoch,
+        iteration_idx,
+        batch_gt_count,
+        per_image_gt_counts,
+        num_pos,
+        flat_preds,
+        pred_bboxes,
+        pred_scores,
+        gt_bboxes,
+        mask_gt,
+        anchor_points,
+        loss_components,
+        loss_total_raw,
+        loss_for_backward,
+        grad_debug=None,
+        reason=None,
+    ):
+        prefix = f"[TrainDebug][Epoch {epoch + 1} Iter {iteration_idx + 1}]"
+        finite = bool(torch.isfinite(loss_for_backward).item())
+
+        print(
+            f"{prefix} gt_count={batch_gt_count} per_image_gt={per_image_gt_counts} "
+            f"num_pos={num_pos}"
+            + (f" reason={reason}" if reason else "")
+        )
+        print(
+            f"{prefix} shapes flat_preds={tuple(flat_preds.shape)} "
+            f"pred_bboxes={tuple(pred_bboxes.shape)} pred_scores={tuple(pred_scores.shape)} "
+            f"gt_bboxes={tuple(gt_bboxes.shape)}"
+        )
+        print(
+            f"{prefix} loss cls={loss_components['cls']:.6f} "
+            f"box={loss_components['box']:.6f} "
+            f"contrastive={loss_components['contrastive']:.6f} "
+            f"temporal={loss_components['temporal']:.6f} "
+            f"total={loss_total_raw.detach().item():.6f} "
+            f"backward_loss={loss_for_backward.detach().item():.6f} "
+            f"dfl=n/a angle=n/a(box term uses ProbIoU OBB)"
+        )
+        print(
+            f"{prefix} tensor dtype={loss_for_backward.dtype} device={loss_for_backward.device} "
+            f"requires_grad={loss_for_backward.requires_grad} finite={finite}"
+        )
+
+        if batch_gt_count > 0:
+            valid_gt_boxes = gt_bboxes[mask_gt.squeeze(-1).bool()]
+            gt_center_min = valid_gt_boxes[:, :2].amin(dim=0).detach().cpu().tolist()
+            gt_center_max = valid_gt_boxes[:, :2].amax(dim=0).detach().cpu().tolist()
+            anchor_min = anchor_points.amin(dim=0).detach().cpu().tolist()
+            anchor_max = anchor_points.amax(dim=0).detach().cpu().tolist()
+            print(
+                f"{prefix} anchor_range=({anchor_min[0]:.4f}, {anchor_min[1]:.4f}) -> "
+                f"({anchor_max[0]:.4f}, {anchor_max[1]:.4f}) "
+                f"gt_center_range=({gt_center_min[0]:.4f}, {gt_center_min[1]:.4f}) -> "
+                f"({gt_center_max[0]:.4f}, {gt_center_max[1]:.4f})"
+            )
+
+        if grad_debug is not None:
+            print(
+                f"{prefix} grad_tensors={grad_debug['grad_tensors']}/{grad_debug['total_tensors']} "
+                f"nonzero_grad_tensors={grad_debug['nonzero_grad_tensors']}"
+            )
+
+    @staticmethod
+    def _format_loss_for_display(loss_value):
+        loss_value = float(loss_value)
+        if abs(loss_value) < 5e-8:
+            loss_value = 0.0
+        return f"{loss_value:.4f}"
 
     def format_targets(self, targets, batch_size):
         targets_np = targets.numpy() if targets.device.type == 'cpu' else targets.cpu().numpy()
@@ -193,6 +303,8 @@ class Trainer:
                     stage_times['data_time'] += self._profile_stamp() - stage_start
                     stage_start = self._profile_stamp()
                 gt_labels, gt_bboxes, mask_gt = self.format_targets(targets, batch_size)
+                batch_gt_count = int(mask_gt.sum().item())
+                per_image_gt_counts = [int(x) for x in mask_gt.squeeze(-1).sum(dim=1).tolist()]
                 if profile_iter:
                     stage_times['target_time'] = self._profile_stamp() - stage_start
 
@@ -203,7 +315,7 @@ class Trainer:
                     flat_preds, feats_for_anchors = flatten_predictions(outputs)
 
                     strides = [4, 8, 16, 32]
-                    anchor_points = self._get_anchor_points(feats_for_anchors, strides)
+                    anchor_points = self._get_anchor_points(feats_for_anchors, strides, imgs_rgb.shape[-2:])
                     if profile_iter:
                         stage_times['forward_time'] = self._profile_stamp() - stage_start
 
@@ -215,25 +327,28 @@ class Trainer:
                         pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes, mask_gt
                     )
                     pos_mask = fg_mask.bool()
+                    num_pos = int(pos_mask.sum().item())
+
+                    zero_term = flat_preds[..., :1].sum() * 0.0
+                    contrastive_loss = zero_term
+                    if getattr(self.model, 'use_contrastive', False) and epoch >= 10:
+                        contrastive_loss = self.model.get_contrastive_alignment_loss(feat_rgb, feat_ir) * 0.1
+
+                    temporal_loss = zero_term
+                    if getattr(self.model, 'temporal_enabled', False):
+                        temporal_candidate = self.model.get_temporal_consistency_loss(
+                            lambda_t=getattr(self.criterion, 'temporal_weight', 0.1),
+                            low_motion_bias=getattr(self.criterion, 'temporal_low_motion_bias', 0.75)
+                        )
+                        if temporal_candidate is not None:
+                            temporal_loss = temporal_candidate
 
                     if pos_mask.any():
                         matched_pred_cls = pred_scores[pos_mask]
                         matched_pred_box = pred_bboxes[pos_mask]
                         matched_tgt_cls = target_labels[pos_mask]
                         matched_tgt_box = target_bboxes[pos_mask]
-
-                        contrastive_loss = 0.0
-                        if getattr(self.model, 'use_contrastive', False) and epoch >= 10:
-                            contrastive_loss = self.model.get_contrastive_alignment_loss(feat_rgb, feat_ir) * 0.1
-
-                        temporal_loss = 0.0
-                        if getattr(self.model, 'temporal_enabled', False):
-                            temporal_loss = self.model.get_temporal_consistency_loss(
-                                lambda_t=getattr(self.criterion, 'temporal_weight', 0.1),
-                                low_motion_bias=getattr(self.criterion, 'temporal_low_motion_bias', 0.75)
-                            )
-
-                        loss_total, _, _ = self.criterion(
+                        loss_total_raw, loss_cls, loss_reg = self.criterion(
                             matched_pred_cls,
                             matched_pred_box,
                             matched_tgt_cls,
@@ -242,10 +357,18 @@ class Trainer:
                             epoch,
                             temporal_loss=temporal_loss,
                         )
+                        zero_pos_reason = None
                     else:
-                        loss_total = flat_preds.sum() * 0.0
+                        loss_cls = zero_term
+                        loss_reg = zero_term
+                        loss_total_raw = zero_term + contrastive_loss + temporal_loss
+                        zero_pos_reason = (
+                            'assigner returned zero positives for a non-empty GT batch'
+                            if batch_gt_count > 0 else
+                            'batch has no GT labels'
+                        )
 
-                    loss_total = loss_total / self.accumulate
+                    loss_total = loss_total_raw / self.accumulate
                     if profile_iter:
                         stage_times['loss_time'] = self._profile_stamp() - stage_start
 
@@ -254,11 +377,40 @@ class Trainer:
                     self.optimizer.zero_grad()
                     continue
 
+                should_debug_step = i < self.debug_loss_steps
+                should_log_zero_pos = self._should_log_zero_pos_debug(num_pos)
                 if profile_iter:
                     stage_start = self._profile_stamp()
                 self.scaler.scale(loss_total).backward()
                 if profile_iter:
                     stage_times['backward_time'] = self._profile_stamp() - stage_start
+
+                if should_debug_step or should_log_zero_pos:
+                    grad_debug = self._collect_grad_debug()
+                    loss_components = {
+                        'cls': float(loss_cls.detach().item()),
+                        'box': float(loss_reg.detach().item()),
+                        'contrastive': float(contrastive_loss.detach().item()),
+                        'temporal': float(temporal_loss.detach().item()),
+                    }
+                    self._log_loss_debug(
+                        epoch=epoch,
+                        iteration_idx=i,
+                        batch_gt_count=batch_gt_count,
+                        per_image_gt_counts=per_image_gt_counts,
+                        num_pos=num_pos,
+                        flat_preds=flat_preds,
+                        pred_bboxes=pred_bboxes,
+                        pred_scores=pred_scores,
+                        gt_bboxes=gt_bboxes,
+                        mask_gt=mask_gt,
+                        anchor_points=anchor_points,
+                        loss_components=loss_components,
+                        loss_total_raw=loss_total_raw,
+                        loss_for_backward=loss_total,
+                        grad_debug=grad_debug,
+                        reason=zero_pos_reason,
+                    )
 
                 if profile_iter:
                     stage_start = self._profile_stamp()
@@ -277,7 +429,11 @@ class Trainer:
                 should_log = ((i + 1) % self.progress_log_interval == 0) or ((i + 1) == len(self.train_loader))
                 if should_log and total_loss_epoch is not None:
                     avg_loss = total_loss_epoch.item() / (i + 1)
-                    pbar.set_postfix({"Loss": f"{avg_loss:.4f}"})
+                    pbar.set_postfix({
+                        "Loss": self._format_loss_for_display(avg_loss),
+                        "Pos": num_pos,
+                        "GT": batch_gt_count,
+                    })
 
                 if profile_iter:
                     iter_end = self._profile_stamp()

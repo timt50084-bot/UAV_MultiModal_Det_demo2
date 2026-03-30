@@ -1,6 +1,5 @@
 import torch
 import torchvision
-import math
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
@@ -18,6 +17,21 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
         anchor_points.append(anchors)
         stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
     return torch.cat(anchor_points), torch.cat(stride_tensor)
+
+
+def normalize_anchor_points(anchor_points, input_hw):
+    """Map pixel-space anchor centers to the normalized [0, 1] label space."""
+    if input_hw is None:
+        return anchor_points
+
+    input_h, input_w = int(input_hw[0]), int(input_hw[1])
+    if input_h <= 0 or input_w <= 0:
+        raise ValueError(f"input_hw must be positive, got: {input_hw}")
+
+    normalized = anchor_points.clone()
+    normalized[:, 0] /= float(input_w)
+    normalized[:, 1] /= float(input_h)
+    return normalized
 
 
 def xywhr2xyxyxyxy(obb):

@@ -38,7 +38,7 @@ def build_experiment_suite(
     source_ir='',
     tracking_gt='',
     image_root='',
-    track_eval_config='configs/exp_tracking_eval.yaml',
+    track_eval_config='configs/main/tracking_eval.yaml',
 ):
     experiments = get_experiments(subset=subset)
     suite = []
@@ -165,7 +165,7 @@ def parse_args():
     parser.add_argument('--source-ir', type=str, default='')
     parser.add_argument('--tracking-gt', type=str, default='')
     parser.add_argument('--image-root', type=str, default='')
-    parser.add_argument('--track-eval-config', type=str, default='configs/exp_tracking_eval.yaml')
+    parser.add_argument('--track-eval-config', type=str, default='configs/main/tracking_eval.yaml')
     parser.add_argument('--emit-script', type=str, default='')
     parser.add_argument('--execute', action='store_true', help='Actually execute the generated commands. Default is plan-only.')
     return parser.parse_args()
