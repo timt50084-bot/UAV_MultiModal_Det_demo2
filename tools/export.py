@@ -26,12 +26,12 @@ class ExportWrapper(torch.nn.Module):
 
 def main():
     parser = argparse.ArgumentParser(description="Export the dual-modal OBB model to ONNX.")
-    parser.add_argument('--config', type=str, default='configs/default.yaml')
-    parser.add_argument('--weights', type=str, required=True)
-    parser.add_argument('--batch-size', type=int, default=1)
+    parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
+    parser.add_argument('--weights', type=str, required=True, help='Checkpoint to export.')
+    parser.add_argument('--batch-size', type=int, default=1, help='Static batch size used for the export dummy input.')
     parser.add_argument('--half', action='store_true', help='Export FP16 model when CUDA is available.')
     parser.add_argument('--dynamic', action='store_true', help='Enable dynamic batch axis.')
-    parser.add_argument('--opset', type=int, default=13)
+    parser.add_argument('--opset', type=int, default=13, help='ONNX opset version.')
     args = parser.parse_args()
 
     cfg = load_config(args.config)

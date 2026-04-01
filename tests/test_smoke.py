@@ -45,11 +45,16 @@ class SmokeTestCase(unittest.TestCase):
                 "type": "YOLODualModalOBB",
                 "num_classes": 1,
                 "channels": [64, 128, 256, 512],
-                "fusion_att_type": "SimpleConcatFusion",
+                "fusion": {
+                    "type": "SimpleConcatFusion",
+                },
                 "norm_type": "GN",
                 "use_contrastive": False,
-                "temporal_enabled": True,
-                "temporal_stride": 1,
+                "temporal": {
+                    "enabled": True,
+                    "mode": "two_frame",
+                    "stride": 1,
+                },
             },
             "assigner": {
                 "type": "DynamicTinyOBBAssigner",

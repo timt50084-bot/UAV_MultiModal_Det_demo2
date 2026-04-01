@@ -4,7 +4,7 @@
 
 - Base defaults live in `configs/default.yaml`.
 - The only recommended day-to-day full-project training entry is `configs/main/full_project.yaml`.
-- For tracking day-to-day work, use the files under `configs/main/` as well.
+- For tracking day-to-day work, use `configs/main/tracking_base.yaml`, `configs/main/tracking_final.yaml`, or `configs/main/tracking_eval.yaml`.
 - Old `configs/exp_*.yaml` command lines are still accepted through loader redirects.
 
 ## Where to edit common training params
@@ -34,9 +34,10 @@ The detector ablation files under `configs/main/` inherit these common settings,
   Main active entry points.
   `full_project.yaml` is the recommended detector training config.
   `baseline.yaml`, `fusion_main.yaml`, `assigner_main.yaml`, and `temporal_main.yaml` are the detector ablation entry points.
-  `tracking_base.yaml`, `tracking_temporal.yaml`, `tracking_modality.yaml`, `tracking_jointlite.yaml`, `tracking_final.yaml`, and `tracking_eval.yaml` are the active tracking-side configs.
+  `tracking_base.yaml`, `tracking_final.yaml`, and `tracking_eval.yaml` are the active tracking-side configs.
 - `configs/archive/`
   Historical detector / eval / infer configs kept only for backward compatibility and reference.
+  Archived tracking stage configs now live under `configs/archive/tracking/`.
 - `configs/dataset/`, `configs/model/`
   Reusable config fragments and references. These are usually not edited for daily runs.
 
@@ -78,9 +79,9 @@ Use files under `configs/main/`:
 - `configs/main/assigner_main.yaml`
   Tiny-angle-aware assigner enabled, fusion and temporal enhancements disabled.
 - `configs/main/temporal_main.yaml`
-  Temporal memory enabled, fusion and assigner enhancements disabled.
+  Two-frame temporal enabled, fusion and assigner enhancements disabled.
 - `configs/main/full_project.yaml`
-  Final detector mainline with fusion + temporal + assigner enhancements all enabled.
+  Final detector mainline with `ReliabilityAwareFusion` + `two_frame` temporal + assigner enhancements all enabled.
 
 Recommended workflow:
 
@@ -93,10 +94,8 @@ Recommended workflow:
 Use files under `configs/main/`:
 
 - `configs/main/tracking_base.yaml`
-- `configs/main/tracking_temporal.yaml`
-- `configs/main/tracking_modality.yaml`
-- `configs/main/tracking_jointlite.yaml`
 - `configs/main/tracking_final.yaml`
 - `configs/main/tracking_eval.yaml`
 
-For backward compatibility, the old `configs/exp_tracking_*.yaml` command lines still resolve to these files.
+Archived stage-by-stage tracking configs are available under `configs/archive/tracking/` for historical experiments only.
+For backward compatibility, the old `configs/exp_tracking_*.yaml` command lines still resolve through redirects.

@@ -94,6 +94,23 @@ class EvalFullTestCase(unittest.TestCase):
         self.assertAlmostEqual(metrics['Recall_S'], 1.0, places=6)
         self.assertAlmostEqual(metrics['Precision_S'], 0.5, places=6)
 
+    def test_small_object_metrics_are_omitted_when_disabled(self):
+        metrics_evaluator = OBBMetricsEvaluator(
+            num_classes=1,
+            extra_metrics_cfg={'small_object': {'enabled': False, 'area_threshold': 32}, 'temporal_stability': {'enabled': False}},
+        )
+        metrics_evaluator.add_batch(
+            ['img1'],
+            [torch.tensor([[10.0, 10.0, 12.0, 12.0, 0.0, 0.95, 0.0]], dtype=torch.float32)],
+            [torch.tensor([[0.0, 10.0, 10.0, 12.0, 12.0, 0.0]], dtype=torch.float32)],
+        )
+
+        metrics = metrics_evaluator.get_full_metrics()
+
+        self.assertNotIn('mAP_S', metrics)
+        self.assertNotIn('Recall_S', metrics)
+        self.assertNotIn('Precision_S', metrics)
+
     def test_rgbdrop_and_irdrop_do_not_mutate_baseline_batch(self):
         imgs_rgb = torch.ones((1, 3, 4, 4), dtype=torch.float32)
         imgs_ir = torch.full((1, 3, 4, 4), 2.0, dtype=torch.float32)

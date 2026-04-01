@@ -7,8 +7,9 @@ experiment:
   enable_unified_dirs: True
 
 model:
-  fusion_att_type: 'SimpleConcatFusion'
-  fusion: null
+  fusion_att_type: null
+  fusion:
+    type: 'SimpleConcatFusion'
   use_contrastive: False
   temporal:
     enabled: False

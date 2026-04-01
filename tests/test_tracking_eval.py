@@ -1,5 +1,6 @@
 ﻿import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 import cv2
@@ -83,6 +84,16 @@ class TrackingEvalTestCase(unittest.TestCase):
             self.assertFalse(result['available'])
             self.assertEqual(result['reason'], 'missing_tracking_gt')
 
+    def test_tracking_eval_reports_missing_predictions_when_only_gt_is_available(self):
+        class DatasetWithTrackingGT:
+            tracking_ground_truth = self._gt_sequences()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = normalize_tracking_eval_cfg({'enabled': True, 'output_dir': tmpdir, 'export_results': False})
+            result = TrackingEvaluator(cfg).evaluate_from_dataset(DatasetWithTrackingGT())
+            self.assertFalse(result['available'])
+            self.assertEqual(result['reason'], 'missing_tracking_predictions')
+
     def test_tracking_error_analysis_summary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = normalize_tracking_eval_cfg({'enabled': True, 'output_dir': tmpdir, 'export_results': False})
@@ -120,11 +131,38 @@ class TrackingEvalTestCase(unittest.TestCase):
             self.assertEqual(len(saved_paths), 3)
             self.assertTrue(all(Path(path).exists() for path in saved_paths))
 
+    def test_tracking_visualization_enabled_flag_is_respected(self):
+        sequence = self._pred_sequences()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_root = Path(tmpdir) / 'images'
+            image_root.mkdir(parents=True, exist_ok=True)
+            for frame in sequence['seq_eval']['frames']:
+                canvas = np.zeros((64, 64, 3), dtype=np.uint8)
+                cv2.imwrite(str(image_root / frame['image_id']), canvas)
+
+            cfg = normalize_tracking_eval_cfg({
+                'enabled': True,
+                'output_dir': tmpdir,
+                'save_visualizations': True,
+                'image_root': str(image_root),
+                'visualization': {'enabled': False},
+            })
+            result = TrackingEvaluator(cfg).evaluate_from_sequences(sequence, gt_sequences=None)
+            self.assertNotIn('visualizations', result.get('exported_files', {}))
+
     def test_tracking_eval_config_loads(self):
         cfg = load_config('configs/exp_tracking_eval.yaml')
         self.assertTrue(cfg.tracking_eval.enabled)
         self.assertTrue(cfg.tracking_eval.mot_metrics)
         self.assertTrue(cfg.tracking_eval.error_analysis)
+        self.assertEqual(cfg.tracking_eval.long_track_min_length, 3)
+
+    def test_tracking_eval_normalization_warns_and_ignores_mot_metrics_flag(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            cfg = normalize_tracking_eval_cfg({'enabled': True, 'mot_metrics': False})
+        self.assertTrue(cfg['mot_metrics'])
+        self.assertTrue(any('tracking_eval.mot_metrics' in str(item.message) for item in caught))
 
     def test_grouped_tracking_analysis_graceful_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:

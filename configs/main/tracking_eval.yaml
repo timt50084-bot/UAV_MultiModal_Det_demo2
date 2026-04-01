@@ -1,15 +1,16 @@
-﻿experiment:
+base_configs:
+  - full_project.yaml
+
+experiment:
   name: 'tracking_eval'
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
 tracking:
   enabled: True
-  method: 'tracking_by_detection'
 
 tracking_eval:
   enabled: True
-  mot_metrics: True
   error_analysis: True
   export_results: True
   save_visualizations: True
@@ -17,10 +18,13 @@ tracking_eval:
   export_csv: True
   export_mot_txt: True
   output_dir: 'outputs/tracking_eval'
+  # This config evaluates a precomputed tracking_results.json file. It does not
+  # make tools/val.py generate tracking predictions automatically.
   results_path: ''
   gt_path: ''
   image_root: ''
   small_object_area_threshold: 32
+  long_track_min_length: 3
   matching:
     iou_threshold: 0.5
     use_obb_iou: True

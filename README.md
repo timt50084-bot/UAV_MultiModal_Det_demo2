@@ -1,6 +1,6 @@
 # UAV Multi-Modal OBB Detection
 
-面向无人机场景的 RGB + IR 双模态旋转框检测与阶段式跟踪框架，覆盖数据准备、训练、验证、推理、实验编排和结果汇总。项目主线不是“最简单的 YOLOv8 封装”，而是围绕双模态输入、小目标、OBB、temporal 和记忆模块做了专门设计，并保留了 tracking 的阶段性扩展能力。
+面向无人机场景的 RGB + IR 双模态旋转框检测与阶段式跟踪框架，覆盖数据准备、训练、验证、推理、实验编排和结果汇总。当前检测主线明确收敛为 RGB+IR 双流输入、OBB 检测、`ReliabilityAwareFusion` 和双帧 `two_frame` temporal；tracking 主线收敛为增强版 tracking-by-detection (`tracking_final`)。
 
 ## 项目简介
 
@@ -8,17 +8,17 @@
 
 - 检测主线支持 RGB + IR 双模态输入。
 - 检测框为 OBB（rotated box），不是普通水平框。
-- 主线配置已经包含小目标增强、双模态融合、temporal memory、角度感知分配等能力。
-- tracking 已有分阶段实现与评估配置，但建议和检测主线区分理解：检测 `full_project` 是日常主入口，tracking 更适合按阶段配置做实验和对比。
+- 主线配置已经包含小目标增强、`ReliabilityAwareFusion`、双帧 temporal、角度感知分配等能力。
+- tracking 主入口保留 `tracking_base` 和 `tracking_final`；中间阶段配置已降级为历史实验入口并移到 `configs/archive/tracking/`。
 
 ## 核心能力
 
 - 双模态输入：`DroneDualDataset` 按配对的 RGB / IR 图像读取数据，训练和推理都走双输入接口。
 - OBB 检测：从数据准备、标签格式、检测头、损失到评估都围绕旋转框实现。
 - 小目标优化：主线配置启用了小目标导向采样、增强型 neck、tiny-aware assigner 和 `mAP_S` 导向的 checkpoint 选择。
-- 多模态融合：主线模型使用 `ReliabilityAwareFusion`，不是简单拼接输入。
-- Temporal / memory：主线检测配置默认启用 `model.temporal.enabled: true` 和 `mode: memory`，用于时序稳定检测。
-- 阶段式 tracking：`configs/main/tracking_*.yaml` 提供从 base 到 final 的逐步增强版本，适合做跟踪实验和消融，不建议和日常检测入口混用。
+- 多模态融合：主线模型使用 `ReliabilityAwareFusion`，baseline 对照保留 `SimpleConcatFusion`。
+- Temporal：主线检测配置默认启用 `model.temporal.enabled: true` 和 `mode: two_frame`，用于双帧时序稳定检测。
+- Tracking：主入口保留 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；归档阶段配置仅用于历史实验或兼容。
 - 工程化闭环：训练、验证、推理、实验计划、结果汇总、模板文档都在仓库里，有统一的输出目录与配置落盘机制。
 
 ## 目录结构
@@ -26,8 +26,8 @@
 - `configs/`
   - 主配置、数据配置、模型配置和历史实验配置。
   - 日常训练优先看 `configs/main/full_project.yaml`。
-  - `configs/main/` 下还放了检测消融配置和 tracking 阶段配置。
-  - `configs/archive/` 主要用于历史实验和兼容，不是日常入口。
+  - `configs/main/` 下保留检测消融配置，以及 tracking 的主入口 `tracking_base.yaml` / `tracking_final.yaml` / `tracking_eval.yaml`。
+  - `configs/archive/` 主要用于历史实验和兼容，不是日常入口；已归档的 tracking 中间阶段配置也放在这里。
 - `src/model/`
   - 检测模型实现，包括 backbone、neck、head、fusion、temporal、detector 组装逻辑。
 - `src/engine/`
@@ -129,7 +129,7 @@ python tools/prepare_dronevehicle_dataset.py \
 注意：
 
 - 主流程依赖 RGB / IR 文件名 stem 对齐，双模态图像需要一一对应。
-- temporal / memory 检测和部分 tracking 逻辑会按序列顺序读取相邻帧，目录内文件命名和排序应保持稳定。
+- 双帧 temporal 检测和部分 tracking memory 逻辑会按序列顺序读取相邻帧，目录内文件命名和排序应保持稳定。
 - 如果你不确定自己的原始数据是否符合脚本假设，先看 `tools/prepare_dronevehicle_dataset.py` 和 `src/data/datasets/drone_rgb_ir.py`，不要直接猜目录格式。
 
 ## 配置系统说明
@@ -147,17 +147,21 @@ python tools/prepare_dronevehicle_dataset.py \
 ### 2. 其他配置文件分别是什么
 
 - `configs/main/baseline.yaml`
-  - 基础检测配置，用于对照实验。
+  - 基础检测配置，用于“简单融合 + 无时序增强”的最小对照实验。
 - `configs/main/fusion_main.yaml`
   - 以融合模块为重点的检测实验配置。
 - `configs/main/assigner_main.yaml`
   - 以 assigner / 小目标匹配策略为重点的检测实验配置。
 - `configs/main/temporal_main.yaml`
-  - 以 temporal memory 检测为重点的检测实验配置。
-- `configs/main/tracking_base.yaml` 到 `configs/main/tracking_final.yaml`
-  - 跟踪阶段配置，按功能逐步增强，不是日常检测训练的统一主入口。
+  - 以双帧 temporal 检测为重点的检测实验配置。
+- `configs/main/tracking_base.yaml`
+  - tracking-by-detection 基础版主入口。
+- `configs/main/tracking_final.yaml`
+  - 增强版 tracking-by-detection 主入口。
 - `configs/main/tracking_eval.yaml`
   - 离线 tracking 评估入口。
+- `configs/archive/tracking/`
+  - 历史 tracking 中间阶段配置，仅用于旧实验复现或兼容加载。
 - `configs/archive/`
   - 历史实验和兼容配置。可以复现旧实验，但不建议作为日常入口。
 
@@ -199,6 +203,7 @@ outputs/experiments/<run_name>/resolved_config.yaml
 
 - 旧的 `configs/exp_*.yaml` 路径仍可通过重定向加载。
 - 如果旧字段和新字段同时存在，配置系统会发出 warning。
+- 旧的 `fusion_att_type` 仍可兼容加载，但新的配置和模型构建应统一使用 `model.fusion.type`。
 
 建议：
 
@@ -259,9 +264,9 @@ python tools/infer.py \
   --save_dir outputs/infer_sequence
 ```
 
-### 5. tracking 阶段配置示例
+### 5. tracking 主线配置示例
 
-如果你要跑跟踪阶段配置，请显式切换到对应的 tracking 配置，例如：
+如果你要跑当前增强版 tracking 主线，请显式切换到 `tracking_final.yaml`，例如：
 
 ```bash
 python tools/infer.py \
@@ -274,8 +279,9 @@ python tools/infer.py \
 
 说明：
 
-- tracking 相关配置建议按阶段理解和使用。
-- `tracking_final.yaml` 属于较完整的阶段配置，不代表所有 tracking 配置都要日常一起改。
+- `tracking_base.yaml` 是最小 tracking-by-detection 对照入口。
+- `tracking_final.yaml` 是当前推荐的增强版 tracking 主入口。
+- `configs/archive/tracking/` 下的中间阶段配置只保留给历史实验或兼容，不再作为 README 主入口。
 
 ### 6. 实验编排与汇总
 
@@ -337,9 +343,10 @@ outputs/
 
 ## 当前状态与注意事项
 
-- 当前主线推荐入口是 `configs/main/full_project.yaml`。
+- 当前检测主线推荐入口是 `configs/main/full_project.yaml`，对应 RGB+IR 双流、`ReliabilityAwareFusion`、`two_frame` temporal 和 OBB detection。
 - `configs/main/` 下的其他检测配置主要用于模块消融和专项实验。
-- `configs/main/tracking_*.yaml` 是阶段式 tracking 配置，不要把它们理解成日常都要同时修改的一组主配置。
+- 当前 tracking 主入口只保留 `configs/main/tracking_base.yaml`、`configs/main/tracking_final.yaml` 和 `configs/main/tracking_eval.yaml`。
+- `configs/archive/tracking/` 和旧 `configs/exp_tracking_*.yaml` 主要用于兼容和历史实验复现，不建议新用户优先使用。
 - `configs/archive/` 和旧 `configs/exp_*.yaml` 主要用于兼容和历史实验复现，不建议新用户优先使用。
 - `tools/infer.py` 是当前推荐的推理入口；`tools/track.py` 更接近兼容或较早期的跟踪封装。
 - `docs/` 下的模板文档适合整理实验、答辩或交付材料，但不代替训练入口说明。

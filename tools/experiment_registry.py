@@ -41,7 +41,7 @@ DETECTION_EXPERIMENTS = (
         'detection',
         'configs/main/temporal_main.yaml',
         'detection_temporal',
-        'Detection mainline with temporal memory enabled.',
+        'Detection mainline with two-frame temporal refinement enabled.',
     ),
     ExperimentSpec(
         'full_project',
@@ -61,39 +61,11 @@ TRACKING_EXPERIMENTS = (
         'Tracking stage 1: tracking-by-detection baseline.',
     ),
     ExperimentSpec(
-        'tracking_assoc',
-        'tracking',
-        'configs/main/tracking_assoc.yaml',
-        'tracking_stage2',
-        'Tracking stage 2: appearance-aware association.',
-    ),
-    ExperimentSpec(
-        'tracking_temporal',
-        'tracking',
-        'configs/main/tracking_temporal.yaml',
-        'tracking_stage3',
-        'Tracking stage 3: temporal memory tracking.',
-    ),
-    ExperimentSpec(
-        'tracking_modality',
-        'tracking',
-        'configs/main/tracking_modality.yaml',
-        'tracking_stage5',
-        'Tracking stage 5: modality-aware dynamic association.',
-    ),
-    ExperimentSpec(
-        'tracking_jointlite',
-        'tracking',
-        'configs/main/tracking_jointlite.yaml',
-        'tracking_stage6',
-        'Tracking stage 6: joint-lite detector-tracker refinement.',
-    ),
-    ExperimentSpec(
         'tracking_final',
         'tracking',
         'configs/main/tracking_final.yaml',
-        'tracking_stage7',
-        'Tracking stage 7: advanced detector-tracker collaboration final.',
+        'tracking_stage_final',
+        'Tracking mainline: advanced detector-tracker collaboration final.',
     ),
 )
 

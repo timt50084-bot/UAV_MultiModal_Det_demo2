@@ -1,4 +1,5 @@
 ﻿import unittest
+import warnings
 
 import torch
 
@@ -83,6 +84,13 @@ class TrackingBaseTestCase(unittest.TestCase):
         self.assertEqual(matches, [])
         self.assertEqual(unmatched_tracks, [0])
         self.assertEqual(unmatched_dets, [0])
+
+    def test_tracking_method_warns_and_falls_back_to_tracking_by_detection(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            cfg = normalize_tracking_cfg({'enabled': True, 'method': 'custom_tracker'})
+        self.assertEqual(cfg['method'], 'tracking_by_detection')
+        self.assertTrue(any('tracking.method' in str(item.message) for item in caught))
 
 
 if __name__ == '__main__':

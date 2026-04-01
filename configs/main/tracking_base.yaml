@@ -1,4 +1,7 @@
-﻿experiment:
+base_configs:
+  - full_project.yaml
+
+experiment:
   name: 'tracking_base'
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
@@ -8,7 +11,6 @@ infer:
 
 tracking:
   enabled: True
-  method: 'tracking_by_detection'
   max_age: 30
   min_hits: 3
   init_score_threshold: 0.3

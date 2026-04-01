@@ -1,8 +1,10 @@
-# Reciprocal Difference Modulation fusion
+# Legacy RDM fusion fragment kept for optional ablation scripts.
+
 model:
   type: 'YOLODualModalOBB'
   num_classes: 5
   channels: [64, 128, 256, 512]
-  fusion_att_type: 'RDMFusion'
+  fusion:
+    type: 'RDMFusion'
   norm_type: 'GN'
   use_contrastive: True

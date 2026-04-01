@@ -31,7 +31,8 @@ def draw_tracking_results(image, frame_results, class_names=None, track_historie
         return image
 
     rendered = image.copy()
-    obb_tensor = torch.tensor([result['obb'] for result in frame_results], dtype=torch.float32)
+    obb_array = np.asarray([result['obb'] for result in frame_results], dtype=np.float32)
+    obb_tensor = torch.from_numpy(obb_array)
     polygons = xywhr2xyxyxyxy(obb_tensor).cpu().numpy().astype(np.int32)
 
     for index, result in enumerate(frame_results):

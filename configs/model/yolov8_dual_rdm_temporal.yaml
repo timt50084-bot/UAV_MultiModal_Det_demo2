@@ -1,13 +1,17 @@
-# Reciprocal Difference Modulation fusion + two-frame temporal refinement
+# Legacy RDM fusion + two-frame temporal fragment kept for optional ablation scripts.
+
 model:
   type: 'YOLODualModalOBB'
   num_classes: 5
   channels: [64, 128, 256, 512]
-  fusion_att_type: 'RDMFusion'
+  fusion:
+    type: 'RDMFusion'
   norm_type: 'GN'
   use_contrastive: True
-  temporal_enabled: True
-  temporal_stride: 1
+  temporal:
+    enabled: True
+    mode: 'two_frame'
+    stride: 1
 
 loss:
   temporal_weight: 0.1

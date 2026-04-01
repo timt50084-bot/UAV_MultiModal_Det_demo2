@@ -589,9 +589,14 @@ def evaluate_mot_dataset(sequence_results, gt_sequences, config=None):
     pred_sequences = normalize_tracking_sequences(sequence_results, kind='pred', default_sequence_id='pred')
     gt_sequence_map = normalize_tracking_sequences(gt_sequences, kind='gt', default_sequence_id='gt')
 
+    if not gt_sequence_map:
+        return {'available': False, 'reason': 'missing_tracking_gt', 'metrics': None, 'per_sequence': {}}
+    if not pred_sequences:
+        return {'available': False, 'reason': 'missing_tracking_predictions', 'metrics': None, 'per_sequence': {}}
+
     common_ids = [sequence_id for sequence_id in pred_sequences.keys() if sequence_id in gt_sequence_map]
     if not common_ids:
-        return {'available': False, 'reason': 'missing_tracking_gt', 'metrics': None, 'per_sequence': {}}
+        return {'available': False, 'reason': 'no_common_tracking_sequences', 'metrics': None, 'per_sequence': {}}
 
     per_sequence = {}
     aggregate = defaultdict(float)
@@ -612,7 +617,7 @@ def evaluate_mot_dataset(sequence_results, gt_sequences, config=None):
         total_pred_tracks += int(metrics.get('num_pred_tracks', 0))
 
     if evaluated_sequences == 0:
-        return {'available': False, 'reason': 'missing_tracking_gt', 'metrics': None, 'per_sequence': {}}
+        return {'available': False, 'reason': 'no_common_tracking_sequences', 'metrics': None, 'per_sequence': {}}
 
     total_gt = max(int(aggregate['num_gt_detections']), 0)
     total_pred = max(int(aggregate['num_pred_detections']), 0)

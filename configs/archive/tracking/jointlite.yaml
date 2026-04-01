@@ -1,8 +1,12 @@
 base_configs:
-  - full_project.yaml
+  - ../../main/full_project.yaml
+
+config_meta:
+  deprecated_message: 'tracking_jointlite is archived for historical stage-by-stage tracking experiments. Prefer configs/main/tracking_base.yaml or configs/main/tracking_final.yaml for active work.'
+  recommended_edit_path: 'configs/archive/tracking/jointlite.yaml'
 
 experiment:
-  name: 'tracking_final'
+  name: 'tracking_jointlite'
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
@@ -60,7 +64,7 @@ tracking:
     keep_tracked_overlap_candidates: True
 
   feature_assist:
-    enabled: True
+    enabled: False
     source: 'temporal_fused'
     embedding_dim: 128
     use_for_reactivation: True
@@ -68,14 +72,14 @@ tracking:
     sampling_radius: 1
 
   reactivation:
-    enabled: True
+    enabled: False
     max_reactivate_age: 8
     use_memory_reactivation: True
     use_feature_assist_reactivation: True
     reactivation_gate: 0.4
 
   overlap_disambiguation:
-    enabled: True
+    enabled: False
     overlap_iou_threshold: 0.45
     ambiguity_margin: 0.10
     assist_margin: 0.05
@@ -89,7 +93,7 @@ tracking:
     use_appearance: True
     use_temporal_memory: True
     use_modality_awareness: True
-    use_feature_assist: True
+    use_feature_assist: False
     dynamic_weighting: True
     w_motion: 0.25
     w_iou: 0.60

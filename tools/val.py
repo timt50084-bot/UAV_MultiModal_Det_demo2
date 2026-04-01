@@ -26,12 +26,17 @@ def set_seed(seed=42):
     torch.cuda.manual_seed_all(seed)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Validate the dual-modal OBB detector.')
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Validate the dual-modal OBB detector.',
+        epilog='OmegaConf-style overrides are also accepted after argparse flags, for example: '
+               'tracking_eval.results_path=outputs/tracking_results.json. '
+               'This entry validates detections by default and does not generate tracking predictions automatically.',
+    )
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
     parser.add_argument('--weights', type=str, default='', help='Checkpoint to validate. Required for detection validation unless tracking_eval.results_path is used.')
     parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
-    return parser.parse_args()
+    return parser.parse_known_args(argv)
 
 
 def print_tracking_eval_result(result):
@@ -80,8 +85,8 @@ def run_tracking_eval_only(cfg):
 
 
 def main():
-    args = parse_args()
-    cfg = load_config(args.config)
+    args, cli_overrides = parse_args()
+    cfg = load_config(args.config, cli_args=cli_overrides)
     cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
 
     tracking_cfg = normalize_tracking_cfg(cfg.get('tracking', {}))
@@ -100,7 +105,13 @@ def main():
     print(f'Experiment name: {run_name}')
 
     if tracking_cfg['enabled']:
-        print('Tracking is enabled in this config. Detection validation remains the default path; tracking evaluation is only activated when tracking_eval.enabled=True.')
+        print('Tracking is enabled in this config. Detection validation remains the default path.')
+    if tracking_eval_cfg['enabled'] and not tracking_eval_cfg.get('results_path'):
+        print(
+            'Tracking evaluation is configured, but no tracking_eval.results_path was provided. '
+            'This validation entry does not generate tracking predictions automatically, '
+            'so tracking evaluation may be skipped unless precomputed tracking results are supplied.'
+        )
 
     set_seed(42)
     if device.type == 'cuda':
@@ -144,6 +155,7 @@ def main():
         else:
             tracking_result = tracking_evaluator.evaluate_from_dataset(getattr(val_loader, 'dataset', None))
         metrics['TrackingEval'] = tracking_result.get('metrics')
+        metrics['TrackingEvalReason'] = tracking_result.get('reason')
         metrics['TrackingEvalAnalysis'] = tracking_result.get('analysis', {}).get('summary') if tracking_result.get('analysis') else None
         if tracking_result.get('exported_files'):
             metrics['TrackingEvalFiles'] = tracking_result['exported_files']
@@ -154,7 +166,8 @@ def main():
     print(f"mAP_50_95: {metrics.get('mAP_50_95', 0.0) * 100:.2f}%")
     print(f"Precision: {metrics.get('Precision', 0.0) * 100:.2f}%")
     print(f"Recall: {metrics.get('Recall', 0.0) * 100:.2f}%")
-    print(f"mAP_S: {metrics.get('mAP_S', 0.0) * 100:.2f}%")
+    if 'mAP_S' in metrics:
+        print(f"mAP_S: {metrics.get('mAP_S', 0.0) * 100:.2f}%")
     if 'Recall_S' in metrics:
         print(f"Recall_S: {metrics.get('Recall_S', 0.0) * 100:.2f}%")
     if 'Precision_S' in metrics:
@@ -183,7 +196,7 @@ def main():
         print_tracking_eval_result(
             {
                 'available': metrics.get('TrackingEval') is not None,
-                'reason': 'missing_tracking_gt' if metrics.get('TrackingEval') is None else None,
+                'reason': metrics.get('TrackingEvalReason', 'missing_tracking_gt') if metrics.get('TrackingEval') is None else None,
                 'metrics': metrics.get('TrackingEval'),
                 'analysis': {'summary': metrics.get('TrackingEvalAnalysis')} if metrics.get('TrackingEvalAnalysis') is not None else None,
                 'exported_files': metrics.get('TrackingEvalFiles', {}),

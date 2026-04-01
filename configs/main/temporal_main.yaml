@@ -7,15 +7,13 @@ experiment:
   enable_unified_dirs: True
 
 model:
-  fusion_att_type: 'SimpleConcatFusion'
-  fusion: null
+  fusion_att_type: null
+  fusion:
+    type: 'SimpleConcatFusion'
   use_contrastive: False
   temporal:
     enabled: True
-    mode: 'memory'
-    memory_len: 3
-    aggregator: 'weighted_avg'
-    gate_hidden_ratio: 0.25
+    mode: 'two_frame'
 
 assigner:
   lambda_theta: 0.0

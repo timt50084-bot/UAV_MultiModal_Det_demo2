@@ -22,6 +22,7 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
     def test_baseline_config_loads(self):
         cfg = self._load_and_build('configs/exp_baseline.yaml')
         self.assertEqual(cfg.experiment.name, 'baseline')
+        self.assertEqual(cfg.model.fusion.type, 'SimpleConcatFusion')
         self.assertEqual(cfg.model.temporal.mode, 'off')
 
     def test_fusion_main_config_loads(self):
@@ -37,12 +38,12 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
     def test_temporal_main_config_loads(self):
         cfg = self._load_and_build('configs/exp_temporal_main.yaml')
         self.assertEqual(cfg.experiment.name, 'temporal_main')
-        self.assertEqual(cfg.model.temporal.mode, 'memory')
+        self.assertEqual(cfg.model.temporal.mode, 'two_frame')
 
     def test_full_project_config_loads(self):
         cfg = self._load_and_build('configs/exp_full_project.yaml')
         self.assertEqual(cfg.experiment.name, 'full_project')
-        self.assertEqual(cfg.model.temporal.mode, 'memory')
+        self.assertEqual(cfg.model.temporal.mode, 'two_frame')
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
 
     def test_formal_mainline_variants_load(self):

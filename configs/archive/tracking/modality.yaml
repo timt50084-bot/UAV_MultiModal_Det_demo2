@@ -1,5 +1,12 @@
-﻿experiment:
-  name: 'tracking_jointlite'
+base_configs:
+  - ../../main/full_project.yaml
+
+config_meta:
+  deprecated_message: 'tracking_modality is archived for historical stage-by-stage tracking experiments. Prefer configs/main/tracking_base.yaml or configs/main/tracking_final.yaml for active work.'
+  recommended_edit_path: 'configs/archive/tracking/modality.yaml'
+
+experiment:
+  name: 'tracking_modality'
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
@@ -8,7 +15,6 @@ infer:
 
 tracking:
   enabled: True
-  method: 'tracking_by_detection'
   max_age: 30
   min_hits: 3
   init_score_threshold: 0.3
@@ -46,7 +52,7 @@ tracking:
     fog_temporal_boost: 0.2
 
   refinement:
-    enabled: True
+    enabled: False
     rescue_low_score: True
     rescue_score_threshold: 0.15
     rescue_match_iou: 0.2
@@ -57,27 +63,6 @@ tracking:
     keep_small_tracked_candidates: True
     keep_tracked_overlap_candidates: True
 
-  feature_assist:
-    enabled: False
-    source: 'temporal_fused'
-    embedding_dim: 128
-    use_for_reactivation: True
-    use_for_overlap_resolution: True
-    sampling_radius: 1
-
-  reactivation:
-    enabled: False
-    max_reactivate_age: 8
-    use_memory_reactivation: True
-    use_feature_assist_reactivation: True
-    reactivation_gate: 0.4
-
-  overlap_disambiguation:
-    enabled: False
-    overlap_iou_threshold: 0.45
-    ambiguity_margin: 0.10
-    assist_margin: 0.05
-
   smoothing:
     enabled: True
     bbox_ema: 0.7
@@ -87,25 +72,21 @@ tracking:
     use_appearance: True
     use_temporal_memory: True
     use_modality_awareness: True
-    use_feature_assist: False
     dynamic_weighting: True
     w_motion: 0.25
     w_iou: 0.60
     w_app: 0.60
     w_temporal: 0.30
     w_score: 0.15
-    w_assist: 0.35
     rgb_bias_gain: 0.5
     ir_bias_gain: 0.5
     low_conf_motion_boost: 0.3
     class_mismatch_penalty: 1000000.0
     appearance_gate: 0.5
-    assist_gate: 0.6
     lost_track_expansion: 1.25
 
 tracking_eval:
   enabled: True
-  mot_metrics: True
   error_analysis: True
   export_results: True
   save_visualizations: False

@@ -1,4 +1,6 @@
-﻿from copy import deepcopy
+from copy import deepcopy
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,16 +9,31 @@ from src.model.backbones.dual_backbone import AsymmetricDualBackbone
 from src.model.heads.obb_decoupled_head import OBBDecoupledHead
 from src.model.necks.enhanced_neck import EnhancedNeck
 from src.model.temporal.temporal_fpn import TemporalFeaturePyramid
-from src.model.temporal.temporal_memory import TemporalMemoryFusion
 from src.registry.fusion_registry import FUSIONS
 from src.registry.model_registry import DETECTORS
 
 
+LEGACY_FUSION_ALIASES = {
+    'JCA': 'DualStreamFusion',
+    'CBAM': 'DualStreamFusion',
+    'RDM': 'RDMFusion',
+}
+
+
 @DETECTORS.register("YOLODualModalOBB")
 class YOLODualModalOBB(nn.Module):
-    def __init__(self, num_classes=5, channels=[64, 128, 256, 512], norm_type='GN',
-                 use_contrastive=False, fusion_att_type='DualStreamFusion',
-                 temporal_enabled=False, temporal_stride=1, fusion=None, temporal=None):
+    def __init__(
+        self,
+        num_classes=5,
+        channels=[64, 128, 256, 512],
+        norm_type='GN',
+        use_contrastive=False,
+        fusion_att_type=None,
+        temporal_enabled=False,
+        temporal_stride=1,
+        fusion=None,
+        temporal=None,
+    ):
         super().__init__()
         self.nc = num_classes
         self.channels = channels
@@ -41,31 +58,45 @@ class YOLODualModalOBB(nn.Module):
         self.temporal_aggregator = temporal_cfg.get('aggregator', 'weighted_avg')
         self.temporal_gate_hidden_ratio = temporal_cfg.get('gate_hidden_ratio', 0.25)
 
-        fusion_aliases = {
-            'JCA': 'DualStreamFusion',
-            'CBAM': 'DualStreamFusion',
-            'RDM': 'RDMFusion',
-        }
         self.backbone = AsymmetricDualBackbone(channels=self.channels, norm_type=self.norm_type)
-        if fusion is not None and 'type' in fusion:
-            fusion_cfg = deepcopy(dict(fusion))
-            fusion_cfg.setdefault('channel_list', self.channels)
-            self.fusion = FUSIONS.build(fusion_cfg)
-        else:
-            fusion_type = fusion_aliases.get(self.fusion_att_type, self.fusion_att_type)
-            self.fusion = FUSIONS.build({'type': fusion_type, 'channel_list': self.channels})
+        self.fusion = self._build_fusion_module(fusion, fusion_att_type)
         self.neck = EnhancedNeck(channels=self.channels)
         self.temporal_fpn = TemporalFeaturePyramid(channels=self.channels) if self.temporal_mode == 'two_frame' else None
-        self.temporal_memory_fusion = (
-            TemporalMemoryFusion(
-                channels=self.channels,
-                memory_len=self.temporal_memory_len,
-                aggregator=self.temporal_aggregator,
-                gate_hidden_ratio=self.temporal_gate_hidden_ratio,
-            )
-            if self.temporal_mode == 'memory' else None
-        )
+        self.temporal_memory_fusion = self._build_temporal_memory_fusion() if self.temporal_mode == 'memory' else None
         self.head = OBBDecoupledHead(num_classes=self.nc, channels=self.channels, return_dict=True)
+
+    def _build_fusion_module(self, fusion, fusion_att_type):
+        if fusion is not None and fusion.get('type'):
+            fusion_cfg = deepcopy(dict(fusion))
+            fusion_cfg.setdefault('channel_list', self.channels)
+            return FUSIONS.build(fusion_cfg)
+
+        fusion_type = LEGACY_FUSION_ALIASES.get(fusion_att_type, fusion_att_type)
+        if fusion_type is None:
+            fusion_type = 'DualStreamFusion'
+        else:
+            warnings.warn(
+                'model.fusion_att_type is deprecated; prefer model.fusion.type in configs and direct model builds.',
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+        return FUSIONS.build({'type': fusion_type, 'channel_list': self.channels})
+
+    def _build_temporal_memory_fusion(self):
+        warnings.warn(
+            "Detection temporal mode 'memory' is deprecated; the maintained mainline uses model.temporal.mode='two_frame'.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        from src.model.temporal.temporal_memory import TemporalMemoryFusion
+
+        return TemporalMemoryFusion(
+            channels=self.channels,
+            memory_len=self.temporal_memory_len,
+            aggregator=self.temporal_aggregator,
+            gate_hidden_ratio=self.temporal_gate_hidden_ratio,
+        )
 
     def _extract_features(self, img_rgb, img_ir, return_attention_map=False, target_size=None):
         h, w = img_rgb.shape[2:]
@@ -119,10 +150,21 @@ class YOLODualModalOBB(nn.Module):
             return [prev_enhanced_feats]
         return []
 
-    def forward(self, img_rgb, img_ir, prev_rgb=None, prev_ir=None, memory_feats=None, return_attention_map=False, return_tracking_features=False):
+    def forward(
+        self,
+        img_rgb,
+        img_ir,
+        prev_rgb=None,
+        prev_ir=None,
+        memory_feats=None,
+        return_attention_map=False,
+        return_tracking_features=False,
+    ):
         self.last_temporal_state = None
         enhanced_feats, feat_rgb, feat_ir, att_maps, target_hw = self._extract_features(
-            img_rgb, img_ir, return_attention_map=return_attention_map
+            img_rgb,
+            img_ir,
+            return_attention_map=return_attention_map,
         )
 
         temporal_maps = {}
@@ -137,7 +179,7 @@ class YOLODualModalOBB(nn.Module):
                 enhanced_feats,
                 prev_enhanced_feats,
                 return_attention_map=True,
-                target_size=target_hw if return_attention_map else None
+                target_size=target_hw if return_attention_map else None,
             )
             self.last_temporal_state = {
                 'current_feats_before_temporal': current_feats_before_temporal,
@@ -147,14 +189,22 @@ class YOLODualModalOBB(nn.Module):
             }
         elif self.temporal_mode == 'memory':
             current_feats_before_temporal = enhanced_feats
-            resolved_memory_steps = self._resolve_memory_steps(memory_feats=memory_feats, prev_rgb=prev_rgb, prev_ir=prev_ir)
+            resolved_memory_steps = self._resolve_memory_steps(
+                memory_feats=memory_feats,
+                prev_rgb=prev_rgb,
+                prev_ir=prev_ir,
+            )
             enhanced_feats, temporal_maps = self.temporal_memory_fusion(
                 enhanced_feats,
                 resolved_memory_steps,
                 return_attention_map=True,
-                target_size=target_hw if return_attention_map else None
+                target_size=target_hw if return_attention_map else None,
             )
-            reference_feats = resolved_memory_steps[-1] if resolved_memory_steps else self._clone_feature_tuple(current_feats_before_temporal)
+            reference_feats = (
+                resolved_memory_steps[-1]
+                if resolved_memory_steps
+                else self._clone_feature_tuple(current_feats_before_temporal)
+            )
             self.last_temporal_state = {
                 'current_feats_before_temporal': current_feats_before_temporal,
                 'current_feats_after_temporal': enhanced_feats,
@@ -164,7 +214,10 @@ class YOLODualModalOBB(nn.Module):
             self.update_temporal_memory(current_feats_before_temporal)
 
         outputs = self.head(enhanced_feats)
-        tracking_payload = self._build_tracking_feature_payload(enhanced_feats, feat_rgb, feat_ir, target_hw) if return_tracking_features else None
+        tracking_payload = (
+            self._build_tracking_feature_payload(enhanced_feats, feat_rgb, feat_ir, target_hw)
+            if return_tracking_features else None
+        )
 
         if return_attention_map:
             merged_maps = {}
@@ -206,7 +259,7 @@ class YOLODualModalOBB(nn.Module):
             spatial_term = F.smooth_l1_loss(
                 current_feat * low_motion_weight,
                 prev_feat.detach() * low_motion_weight,
-                reduction='none'
+                reduction='none',
             ).mean(dim=(1, 2, 3))
             losses.append((cosine_term + spatial_term).mean())
 

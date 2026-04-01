@@ -19,6 +19,9 @@ experiment:
 
 dataset:
   type: 'DroneDualDataset'
+  # Reserved for dataset preparation bookkeeping only. Training / validation /
+  # inference read dataset.root_dir instead; tools/prepare_dronevehicle_dataset.py
+  # still takes its own --raw-root CLI argument.
   raw_root: 'D:/DataSet/DroneVehicle'
   root_dir: 'D:/DataSet/DroneVehicle_Processed'
   split: 'train'
@@ -65,6 +68,7 @@ model:
   type: 'YOLODualModalOBB'
   num_classes: 5
   channels: [64, 128, 256, 512]
+  # Legacy compatibility field. New configs should use model.fusion.type.
   fusion_att_type: 'JCA'
   norm_type: 'GN'
   use_contrastive: False
@@ -125,6 +129,12 @@ val:
     max_wh: 4096.0
 
 eval:
+  small_object:
+    # Optional small-object metrics. When disabled, validation stops emitting
+    # mAP_S / Recall_S / Precision_S so the metrics dict matches the config.
+    enabled: True
+    area_threshold: 32
+    iou_threshold: 0.5
   cross_modal_robustness:
     # When enabled in validation, the evaluator runs two additional passes:
     # one with RGB dropped and one with IR dropped. Results are reported via
@@ -179,6 +189,8 @@ infer:
 # Tracking
 tracking:
   enabled: False
+  # Compatibility field only. The current runtime is fixed to
+  # tracking_by_detection; custom values are ignored with a warning.
   method: 'tracking_by_detection'
   max_age: 30
   min_hits: 3
@@ -276,6 +288,8 @@ tracking:
 # Offline tracking evaluation
 tracking_eval:
   enabled: False
+  # Compatibility field only. MOT metrics are always computed/exported when
+  # tracking evaluation runs; setting this to False is ignored with a warning.
   mot_metrics: True
   error_analysis: True
   export_results: True
@@ -284,10 +298,16 @@ tracking_eval:
   export_csv: True
   export_mot_txt: False
   output_dir: 'outputs/tracking_eval'
+  # Provide a precomputed tracking result file for tracking-only evaluation.
+  # tools/val.py will not generate tracking predictions automatically when this
+  # path is empty.
   results_path: ''
   gt_path: ''
   image_root: ''
   small_object_area_threshold: 32
+  # Minimum observed length used by tracking analysis summaries for
+  # long-track continuity / survival statistics.
+  long_track_min_length: 3
   matching:
     iou_threshold: 0.5
     use_obb_iou: True

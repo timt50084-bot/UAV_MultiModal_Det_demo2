@@ -271,13 +271,15 @@ class Evaluator:
                 metrics['ErrorAnalysisFiles'] = analysis['exported_files']
 
         if self.rank == 0:
-            print(
-                f"\n[Val Report] mAP@0.5: {metrics.get('mAP_50', 0):.4f} | "
-                f"mAP@0.5:0.95: {metrics.get('mAP_50_95', 0):.4f} | "
-                f"P: {metrics.get('Precision', 0):.4f} | "
-                f"R: {metrics.get('Recall', 0):.4f} | "
-                f"AP_S: {metrics.get('mAP_S', 0):.4f}"
-            )
+            report_parts = [
+                f"mAP@0.5: {metrics.get('mAP_50', 0):.4f}",
+                f"mAP@0.5:0.95: {metrics.get('mAP_50_95', 0):.4f}",
+                f"P: {metrics.get('Precision', 0):.4f}",
+                f"R: {metrics.get('Recall', 0):.4f}",
+            ]
+            if 'mAP_S' in metrics:
+                report_parts.append(f"AP_S: {metrics['mAP_S']:.4f}")
+            print(f"\n[Val Report] {' | '.join(report_parts)}")
             if 'ErrorAnalysisFiles' in metrics:
                 print(f"[Val ErrorAnalysis] exported to: {metrics['ErrorAnalysisFiles']}")
 

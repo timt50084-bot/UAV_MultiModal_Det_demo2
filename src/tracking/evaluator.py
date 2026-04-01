@@ -1,5 +1,6 @@
 ﻿from copy import deepcopy
 from pathlib import Path
+import warnings
 
 from omegaconf import OmegaConf
 
@@ -23,6 +24,7 @@ TRACKING_EVAL_DEFAULTS = {
     'gt_path': '',
     'image_root': '',
     'small_object_area_threshold': 32,
+    'long_track_min_length': 3,
     'matching': {
         'iou_threshold': 0.5,
         'use_obb_iou': True,
@@ -49,11 +51,19 @@ def normalize_tracking_eval_cfg(tracking_eval_cfg=None):
         tracking_eval_cfg = OmegaConf.to_container(tracking_eval_cfg, resolve=True)
     if not isinstance(tracking_eval_cfg, dict):
         return cfg
+    requested_mot_metrics = tracking_eval_cfg.get('mot_metrics', TRACKING_EVAL_DEFAULTS['mot_metrics'])
     for key, value in tracking_eval_cfg.items():
         if key in {'matching', 'grouped_analysis', 'visualization'} and isinstance(value, dict):
             cfg[key].update(value)
         else:
             cfg[key] = value
+    if 'mot_metrics' in tracking_eval_cfg and not bool(requested_mot_metrics):
+        warnings.warn(
+            'tracking_eval.mot_metrics is retained for compatibility, but tracking evaluation always computes '
+            'and exports MOT metrics when it runs. The flag is ignored and treated as True.',
+            stacklevel=2,
+        )
+        cfg['mot_metrics'] = TRACKING_EVAL_DEFAULTS['mot_metrics']
     return cfg
 
 
@@ -95,6 +105,9 @@ class TrackingEvaluator:
     def _maybe_render_visualizations(self, pred_sequences):
         if not self.cfg.get('save_visualizations', False):
             return {}
+        visualization_cfg = self.cfg.get('visualization', {}) if isinstance(self.cfg.get('visualization', {}), dict) else {}
+        if not visualization_cfg.get('enabled', True):
+            return {}
         image_root = self.cfg.get('image_root', '')
         if not image_root:
             return {}
@@ -111,7 +124,7 @@ class TrackingEvaluator:
                 image_root=image_root,
                 output_dir=visualization_dir / sequence_id.replace('/', '_'),
                 class_names=self.class_names,
-                visualization_cfg=self.cfg.get('visualization', {}),
+                visualization_cfg=visualization_cfg,
             )
         return saved
 

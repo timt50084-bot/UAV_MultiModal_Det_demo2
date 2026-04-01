@@ -45,7 +45,7 @@ class TemporalMemoryTestCase(unittest.TestCase):
             "type": "YOLODualModalOBB",
             "num_classes": 1,
             "channels": [32, 64, 128, 256],
-            "fusion_att_type": "SimpleConcatFusion",
+            "fusion": {"type": "SimpleConcatFusion"},
             "temporal": {
                 "enabled": True,
                 "mode": "memory",
@@ -63,7 +63,7 @@ class TemporalMemoryTestCase(unittest.TestCase):
             "type": "YOLODualModalOBB",
             "num_classes": 1,
             "channels": [32, 64, 128, 256],
-            "fusion_att_type": "SimpleConcatFusion",
+            "fusion": {"type": "SimpleConcatFusion"},
             "temporal": {
                 "enabled": True,
                 "mode": "memory",
@@ -88,11 +88,27 @@ class TemporalMemoryTestCase(unittest.TestCase):
             "type": "YOLODualModalOBB",
             "num_classes": 1,
             "channels": [32, 64, 128, 256],
-            "fusion_att_type": "SimpleConcatFusion",
-            "temporal_enabled": True,
+            "fusion": {"type": "SimpleConcatFusion"},
+            "temporal": {
+                "enabled": True,
+                "mode": "two_frame",
+            },
         })
         self.assertEqual(model.temporal_mode, "two_frame")
         self.assertIsNotNone(model.temporal_fpn)
+
+    def test_legacy_fusion_att_type_still_builds(self):
+        model = build_model({
+            "type": "YOLODualModalOBB",
+            "num_classes": 1,
+            "channels": [32, 64, 128, 256],
+            "fusion_att_type": "SimpleConcatFusion",
+            "temporal": {
+                "enabled": False,
+                "mode": "off",
+            },
+        })
+        self.assertEqual(model.fusion.__class__.__name__, "SimpleConcatFusion")
 
 
 if __name__ == "__main__":

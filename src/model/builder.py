@@ -10,10 +10,8 @@ def _ensure_model_modules_registered():
         'src.model.fusion.rdm_fusion',
         'src.model.fusion.reliability_fusion',
         'src.model.fusion.simple_concat',
-        'src.model.fusion.adaptive_fusion',
         'src.model.necks.enhanced_neck',
         'src.model.temporal.temporal_fpn',
-        'src.model.temporal.temporal_memory',
         'src.model.heads.obb_decoupled_head',
         'src.model.detectors.yolo_dual',
     ]

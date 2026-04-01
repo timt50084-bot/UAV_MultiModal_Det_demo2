@@ -1,15 +1,10 @@
-# 模型基础参数
-# configs/model/yolov8_dual_base.yaml
-# 消融实验对照组 (Baseline)：极简特征拼接，关闭对比损失
+# Legacy baseline detector fragment used by older shell ablation scripts.
 
 model:
   type: 'YOLODualModalOBB'
   num_classes: 5
   channels: [64, 128, 256, 512]
-
-  # 【退化处理】换成我们在 fusion/ 目录下写的极简对照组
-  fusion_att_type: 'SimpleConcatFusion'
+  fusion:
+    type: 'SimpleConcatFusion'
   norm_type: 'GN'
-
-  # 关闭模态对齐损失
   use_contrastive: False

@@ -1,5 +1,6 @@
 import math
 from copy import deepcopy
+import warnings
 
 import torch
 from omegaconf import OmegaConf
@@ -79,6 +80,7 @@ def normalize_tracking_cfg(tracking_cfg=None):
 
     if not isinstance(tracking_cfg, dict):
         return cfg
+    requested_method = tracking_cfg.get('method', TRACKING_DEFAULTS['method'])
 
     appearance_input = tracking_cfg.get('appearance', {}) if isinstance(tracking_cfg.get('appearance', {}), dict) else {}
     memory_input = tracking_cfg.get('memory', {}) if isinstance(tracking_cfg.get('memory', {}), dict) else {}
@@ -124,6 +126,13 @@ def normalize_tracking_cfg(tracking_cfg=None):
         cfg['smoothing']['angle_ema'] = tracking_cfg['angle_smoothing']
     if 'reliability_ema' in modality_input:
         cfg['modality']['reliability_ema'] = modality_input['reliability_ema']
+    if 'method' in tracking_cfg and requested_method != TRACKING_DEFAULTS['method']:
+        warnings.warn(
+            'tracking.method is retained for compatibility, but the current runtime only supports '
+            '`tracking_by_detection`. Custom method values are ignored.',
+            stacklevel=2,
+        )
+        cfg['method'] = TRACKING_DEFAULTS['method']
 
     cfg['class_mismatch_penalty'] = cfg['association']['class_mismatch_penalty']
     return cfg

@@ -186,30 +186,32 @@ class OBBMetricsEvaluator:
 
     def _compute_metrics_dict(self, preds, gts, image_metadata, include_grouped_metrics=True):
         detection_metrics = self._compute_detection_metrics(preds, gts, iou_thresh=0.5, eval_small_only=False)
+        small_cfg = self.extra_metrics_cfg['small_object']
         metrics = {
             'mAP_50': detection_metrics['mAP'],
             'mAP_50_95': self._compute_map_range(preds, gts),
             'Precision': detection_metrics['Precision'],
             'Recall': detection_metrics['Recall'],
-            'mAP_S': self._compute_detection_metrics(preds, gts, iou_thresh=0.5, eval_small_only=True)['mAP'],
         }
+        if small_cfg.get('enabled', True):
+            metrics['mAP_S'] = self._compute_detection_metrics(preds, gts, iou_thresh=0.5, eval_small_only=True)['mAP']
 
         poly_cache = detection_metrics['poly_cache']
 
         def match_iou_fn(pred_box, gt_box):
             return polygon_iou(pred_box, gt_box, poly_cache)
 
-        small_cfg = self.extra_metrics_cfg['small_object']
-        small_metrics = compute_small_object_metrics(
-            preds,
-            gts,
-            num_classes=self.nc,
-            area_threshold=resolve_small_area_threshold(small_cfg.get('area_threshold', 32)),
-            iou_threshold=small_cfg.get('iou_threshold', 0.5),
-            match_iou_fn=match_iou_fn,
-        )
-        metrics['Recall_S'] = small_metrics['Recall_S']
-        metrics['Precision_S'] = small_metrics['Precision_S']
+        if small_cfg.get('enabled', True):
+            small_metrics = compute_small_object_metrics(
+                preds,
+                gts,
+                num_classes=self.nc,
+                area_threshold=resolve_small_area_threshold(small_cfg.get('area_threshold', 32)),
+                iou_threshold=small_cfg.get('iou_threshold', 0.5),
+                match_iou_fn=match_iou_fn,
+            )
+            metrics['Recall_S'] = small_metrics['Recall_S']
+            metrics['Precision_S'] = small_metrics['Precision_S']
 
         temporal_cfg = self.extra_metrics_cfg['temporal_stability']
         temporal_enabled = temporal_cfg.get('enabled', 'auto')

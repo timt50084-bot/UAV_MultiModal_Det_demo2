@@ -1,4 +1,11 @@
-﻿experiment:
+base_configs:
+  - ../../main/full_project.yaml
+
+config_meta:
+  deprecated_message: 'tracking_assoc is archived for historical stage-by-stage tracking experiments. Prefer configs/main/tracking_base.yaml or configs/main/tracking_final.yaml for active work.'
+  recommended_edit_path: 'configs/archive/tracking/assoc.yaml'
+
+experiment:
   name: 'tracking_assoc'
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
@@ -8,7 +15,6 @@ infer:
 
 tracking:
   enabled: True
-  method: 'tracking_by_detection'
   max_age: 30
   min_hits: 3
   init_score_threshold: 0.3
