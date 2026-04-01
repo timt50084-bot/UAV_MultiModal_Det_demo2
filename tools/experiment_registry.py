@@ -1,4 +1,9 @@
-"""Registry helpers for the unified detection and tracking experiment suite."""
+"""Registry helpers for the active detection and tracking experiment suite.
+
+The active tracking suite intentionally contains only tracking_base and
+tracking_final. tracking_eval remains a companion offline-evaluation config and
+is not listed as a runnable train/infer experiment here.
+"""
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,35 +25,35 @@ DETECTION_EXPERIMENTS = (
         'detection',
         'configs/main/baseline.yaml',
         'detection_baseline',
-        'Stable baseline detector.',
+        'Baseline detector: SimpleConcatFusion with temporal enhancement disabled.',
     ),
     ExperimentSpec(
         'fusion_main',
         'detection',
         'configs/main/fusion_main.yaml',
         'detection_fusion',
-        'Detection mainline with reliability-aware fusion.',
+        'Detector ablation with ReliabilityAwareFusion enabled.',
     ),
     ExperimentSpec(
         'assigner_main',
         'detection',
         'configs/main/assigner_main.yaml',
         'detection_assigner',
-        'Detection mainline with tiny-aware / angle-aware assigner.',
+        'Detector ablation with tiny-aware / angle-aware assigner enabled.',
     ),
     ExperimentSpec(
         'temporal_main',
         'detection',
         'configs/main/temporal_main.yaml',
         'detection_temporal',
-        'Detection mainline with two-frame temporal refinement enabled.',
+        'Detector ablation with two-frame temporal refinement enabled.',
     ),
     ExperimentSpec(
         'full_project',
         'detection',
         'configs/main/full_project.yaml',
         'detection_full',
-        'Unified full detector configuration.',
+        'Detector mainline: ReliabilityAwareFusion + two_frame temporal + assigner enhancements.',
     ),
 )
 
@@ -57,15 +62,15 @@ TRACKING_EXPERIMENTS = (
         'tracking_base',
         'tracking',
         'configs/main/tracking_base.yaml',
-        'tracking_stage1',
-        'Tracking stage 1: tracking-by-detection baseline.',
+        'tracking_base',
+        'Tracking baseline: minimal tracking-by-detection entry.',
     ),
     ExperimentSpec(
         'tracking_final',
         'tracking',
         'configs/main/tracking_final.yaml',
-        'tracking_stage_final',
-        'Tracking mainline: advanced detector-tracker collaboration final.',
+        'tracking_final',
+        'Tracking mainline: enhanced tracking-by-detection final route.',
     ),
 )
 

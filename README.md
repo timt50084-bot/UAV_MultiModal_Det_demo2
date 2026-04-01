@@ -9,7 +9,7 @@
 - 检测主线支持 RGB + IR 双模态输入。
 - 检测框为 OBB（rotated box），不是普通水平框。
 - 主线配置已经包含小目标增强、`ReliabilityAwareFusion`、双帧 temporal、角度感知分配等能力。
-- tracking 主入口保留 `tracking_base` 和 `tracking_final`；中间阶段配置已降级为历史实验入口并移到 `configs/archive/tracking/`。
+- tracking 主入口保留 `tracking_base` 和 `tracking_final`；`tracking_eval` 仅作为离线评估辅助入口；中间阶段配置已降级为历史实验入口并移到 `configs/archive/tracking/`。
 
 ## 核心能力
 
@@ -18,7 +18,7 @@
 - 小目标优化：主线配置启用了小目标导向采样、增强型 neck、tiny-aware assigner 和 `mAP_S` 导向的 checkpoint 选择。
 - 多模态融合：主线模型使用 `ReliabilityAwareFusion`，baseline 对照保留 `SimpleConcatFusion`。
 - Temporal：主线检测配置默认启用 `model.temporal.enabled: true` 和 `mode: two_frame`，用于双帧时序稳定检测。
-- Tracking：主入口保留 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；归档阶段配置仅用于历史实验或兼容。
+- Tracking：主入口保留 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；`configs/main/tracking_eval.yaml` 仅用于离线评估；归档阶段配置仅用于历史实验或兼容。
 - 工程化闭环：训练、验证、推理、实验计划、结果汇总、模板文档都在仓库里，有统一的输出目录与配置落盘机制。
 
 ## 目录结构
@@ -26,7 +26,7 @@
 - `configs/`
   - 主配置、数据配置、模型配置和历史实验配置。
   - 日常训练优先看 `configs/main/full_project.yaml`。
-  - `configs/main/` 下保留检测消融配置，以及 tracking 的主入口 `tracking_base.yaml` / `tracking_final.yaml` / `tracking_eval.yaml`。
+  - `configs/main/` 下保留检测消融配置，以及 tracking 的主入口 `tracking_base.yaml` / `tracking_final.yaml`；`tracking_eval.yaml` 作为离线评估辅助入口保留。
   - `configs/archive/` 主要用于历史实验和兼容，不是日常入口；已归档的 tracking 中间阶段配置也放在这里。
 - `src/model/`
   - 检测模型实现，包括 backbone、neck、head、fusion、temporal、detector 组装逻辑。
@@ -129,7 +129,7 @@ python tools/prepare_dronevehicle_dataset.py \
 注意：
 
 - 主流程依赖 RGB / IR 文件名 stem 对齐，双模态图像需要一一对应。
-- 双帧 temporal 检测和部分 tracking memory 逻辑会按序列顺序读取相邻帧，目录内文件命名和排序应保持稳定。
+- 双帧 temporal 检测和 `tracking_final` 中的 tracking memory 逻辑会按序列顺序读取相邻帧，目录内文件命名和排序应保持稳定。
 - 如果你不确定自己的原始数据是否符合脚本假设，先看 `tools/prepare_dronevehicle_dataset.py` 和 `src/data/datasets/drone_rgb_ir.py`，不要直接猜目录格式。
 
 ## 配置系统说明
@@ -159,7 +159,7 @@ python tools/prepare_dronevehicle_dataset.py \
 - `configs/main/tracking_final.yaml`
   - 增强版 tracking-by-detection 主入口。
 - `configs/main/tracking_eval.yaml`
-  - 离线 tracking 评估入口。
+  - 离线 tracking 评估辅助入口，不是 tracking 主线训练 / 推理入口。
 - `configs/archive/tracking/`
   - 历史 tracking 中间阶段配置，仅用于旧实验复现或兼容加载。
 - `configs/archive/`
@@ -204,6 +204,7 @@ outputs/experiments/<run_name>/resolved_config.yaml
 - 旧的 `configs/exp_*.yaml` 路径仍可通过重定向加载。
 - 如果旧字段和新字段同时存在，配置系统会发出 warning。
 - 旧的 `fusion_att_type` 仍可兼容加载，但新的配置和模型构建应统一使用 `model.fusion.type`。
+- detection 侧旧的 temporal memory 路线仍可兼容加载，但它只用于历史实验或兼容；当前检测主线仍然是 `two_frame` temporal。`tracking_final` 里的 tracking memory 不受这条降级说明影响。
 
 建议：
 
@@ -281,6 +282,7 @@ python tools/infer.py \
 
 - `tracking_base.yaml` 是最小 tracking-by-detection 对照入口。
 - `tracking_final.yaml` 是当前推荐的增强版 tracking 主入口。
+- `tracking_eval.yaml` 是配套的离线评估入口，用于评估已有 `tracking_results.json`，不是新的 tracking 主线。
 - `configs/archive/tracking/` 下的中间阶段配置只保留给历史实验或兼容，不再作为 README 主入口。
 
 ### 6. 实验编排与汇总
@@ -345,7 +347,8 @@ outputs/
 
 - 当前检测主线推荐入口是 `configs/main/full_project.yaml`，对应 RGB+IR 双流、`ReliabilityAwareFusion`、`two_frame` temporal 和 OBB detection。
 - `configs/main/` 下的其他检测配置主要用于模块消融和专项实验。
-- 当前 tracking 主入口只保留 `configs/main/tracking_base.yaml`、`configs/main/tracking_final.yaml` 和 `configs/main/tracking_eval.yaml`。
+- 当前 tracking 主入口只突出 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；`configs/main/tracking_eval.yaml` 是配套的离线评估配置。
+- detection 侧 temporal memory 仅保留为历史实验 / 兼容路径，不再代表检测主线；tracking 侧 memory 仍然是 `tracking_final` 的有效能力。
 - `configs/archive/tracking/` 和旧 `configs/exp_tracking_*.yaml` 主要用于兼容和历史实验复现，不建议新用户优先使用。
 - `configs/archive/` 和旧 `configs/exp_*.yaml` 主要用于兼容和历史实验复现，不建议新用户优先使用。
 - `tools/infer.py` 是当前推荐的推理入口；`tools/track.py` 更接近兼容或较早期的跟踪封装。

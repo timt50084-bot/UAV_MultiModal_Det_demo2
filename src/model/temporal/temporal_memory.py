@@ -1,3 +1,10 @@
+"""Legacy detector-side temporal-memory refinement kept for compatibility.
+
+The maintained detection mainline uses two-frame temporal fusion. This module is
+retained only so archived experiments and compatibility tests can still load.
+It does not affect tracking-side memory used by tracking_final.
+"""
+
 from collections.abc import Sequence
 
 import torch
@@ -81,7 +88,7 @@ class TemporalMemoryBlock(nn.Module):
 
 
 class TemporalMemoryFusion(nn.Module):
-    """Lightweight short-term temporal memory refinement over neck features."""
+    """Legacy detector-side temporal-memory refinement over neck features."""
 
     def __init__(self, channels=None, memory_len=3, aggregator='weighted_avg', gate_hidden_ratio=0.25):
         super().__init__()

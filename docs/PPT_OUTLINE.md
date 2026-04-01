@@ -1,44 +1,52 @@
 # PPT Outline
 
-## 1. ????
-- ????
-- ????
-- ??????
+## 1. Problem
 
-## 2. ????
-- ??? RGB-T ????
-- UAV ??? + OBB ??
-- Tracking ???????? ID switch ??
+- UAV RGB+IR perception under day / night / low-visibility conditions
+- OBB detection for rotated small targets
+- Tracking-by-detection with stable IDs and reduced short-term breaks
 
-## 3. ?????
-- Detector ??
-- Tracking ??
-- Eval / summary / delivery ??
+## 2. Project Scope
 
-## 4. Detection ???
-- ????
-- tiny-aware / angle-aware assigner ??
-- temporal memory ??
+- Detector: RGB+IR dual stream + OBB detection
+- Tracking: base baseline and enhanced final route
+- Evaluation: detection metrics, tracking metrics, grouped analysis, report outputs
 
-## 5. Tracking ???
-- tracking-by-detection baseline
-- appearance / temporal / modality-aware association
-- joint-lite refinement
-- final feature-assist reactivation + overlap disambiguation
+## 3. System Pipeline
 
-## 6. ????
-- Detection ??
-- Tracking ??
-- ??????
-- Runtime / complexity ??
+- Detector training / validation
+- Sequence inference with tracking
+- Offline tracking evaluation and result summarization
 
-## 7. ???????
-- detection ???
-- tracking trajectory ???
-- ??????
-- ??????
+## 4. Detection Mainline
 
-## 8. ?????
-- ????
-- ????
-- ?????
+- RGB+IR dual-stream detector
+- ReliabilityAwareFusion
+- two_frame temporal refinement
+- Tiny-aware / angle-aware assigner
+
+## 5. Tracking Mainline
+
+- `tracking_base`: minimal tracking-by-detection baseline
+- `tracking_final`: enhanced route with appearance, tracking memory, modality awareness, refinement, and feature-assisted reactivation
+- Archived stage-by-stage tracking configs are historical only and should not be the main presentation path
+
+## 6. Results
+
+- Detection metrics and small-object metrics
+- Tracking metrics and continuity metrics
+- Grouped analysis by time of day / weather / size
+- Runtime / complexity snapshot
+
+## 7. Visual Cases
+
+- Detection visualizations
+- Tracking trajectory visualizations
+- Day / night / low-visibility examples
+- Failure and recovery cases
+
+## 8. Closing
+
+- Main takeaways
+- Remaining risks
+- Next-step suggestions

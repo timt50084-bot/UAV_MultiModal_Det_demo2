@@ -54,52 +54,27 @@
 
 ## Config Entry
 
-- `configs/exp_baseline.yaml`
-- `configs/exp_fusion_main.yaml`
-- `configs/exp_assigner_main.yaml`
-- `configs/exp_temporal_main.yaml`
-- `configs/exp_full_project.yaml`
+- `configs/main/baseline.yaml`
+- `configs/main/fusion_main.yaml`
+- `configs/main/assigner_main.yaml`
+- `configs/main/temporal_main.yaml`
+- `configs/main/full_project.yaml`
 
 ## Compatibility Note
 
-- Legacy configs still load.
-- New configs are the recommended main entry for future training and reporting.
+- Legacy `configs/exp_*.yaml` command lines still load through redirects.
+- New `configs/main/*.yaml` files are the recommended main entry for future training and reporting.
 
-## Tracking Stage 1 Note
+## Tracking Mainline Note
 
-- `configs/exp_tracking_base.yaml` is the minimal tracking-by-detection entry.
-- Stage 1 focuses on stable `track_id` assignment and short-term recovery.
+- `configs/main/tracking_base.yaml` is the minimal tracking-by-detection entry.
+- `configs/main/tracking_final.yaml` is the enhanced tracking mainline.
+- `configs/main/tracking_eval.yaml` is the companion offline evaluation config for precomputed tracking outputs.
+- Historical stage-by-stage tracking configs now live under `configs/archive/tracking/` and are kept only for old experiment reproduction or compatibility.
 - Sequence tracking outputs are generated through `tools/infer.py` or `tools/track.py`.
-- MOT metrics, ReID, and multi-frame fusion are intentionally deferred to later tracking stages.
-
-## Tracking Stage 4 Note
-
-- Use `configs/exp_tracking_base.yaml`, `configs/exp_tracking_assoc.yaml`, `configs/exp_tracking_temporal.yaml`, `configs/exp_tracking_modality.yaml`, `configs/exp_tracking_jointlite.yaml`, and `configs/exp_tracking_final.yaml` to export comparable sequence results.
-- Use `configs/exp_tracking_eval.yaml` for offline tracking evaluation and analysis.
 - Recommended comparison metrics: `MOTA`, `IDF1`, `IDSwitches`, `Fragmentations`, and the small-object tracking summary.
 - Recommended outputs: `mot_metrics.json`, `tracking_error_summary.json`, `per_sequence_tracking_analysis.json`, `per_track_analysis.csv`, and rendered sequence visualizations when image roots are available.
 - If tracking ground truth is missing, the evaluation entry keeps a structured skip result instead of failing.
-
-## Tracking Stage 5 Note
-
-- `configs/exp_tracking_modality.yaml` is the stage-5 entry for modality-aware dynamic association and scene-adaptive tracking.
-- Compare it directly with `exp_tracking_base`, `exp_tracking_assoc`, and `exp_tracking_temporal` to measure how modality awareness helps under night, fog, and low-visibility conditions.
-- Key stage-5 counters to record: `rgb_dominant_association_count`, `ir_dominant_association_count`, `balanced_association_count`, `low_confidence_motion_fallback_count`, and `modality_helped_reactivation_count`.
-- If grouped metadata is available, inspect `time_of_day` and `weather` splits for night / fog robustness.
-
-## Tracking Stage 6 Note
-
-- `configs/exp_tracking_jointlite.yaml` is the stage-6 entry for track-aware detection refinement.
-- Compare it directly with `configs/exp_tracking_modality.yaml` to measure whether low-score rescue and track-guided prediction reduce short-term breaks on small and occluded targets.
-- Key stage-6 counters to record: `rescued_detection_count`, `rescued_small_object_count`, `track_guided_prediction_count`, `predicted_only_track_count`, `refinement_helped_reactivation_count`, and `refinement_suppressed_false_drop_count`.
-- If tracking ground truth is incomplete, keep the runtime analysis and visualization outputs as the first-pass validation path.
-
-## Tracking Stage 7 Note
-
-- `configs/exp_tracking_final.yaml` is the final tracking mainline for stronger detector-tracker collaboration and advanced temporal recovery.
-- Compare it directly with `configs/exp_tracking_jointlite.yaml` to measure whether reactivation, overlap handling, and long-track continuity improve further.
-- Key stage-7 counters to record: `feature_assist_reactivation_count`, `memory_reactivation_count`, `overlap_disambiguation_count`, `overlap_disambiguation_helped_count`, `long_track_continuity_score`, and `small_object_track_survival_rate`.
-- If tracking ground truth is still incomplete, preserve runtime advanced summary outputs and qualitative tracking videos for the report package.
 
 ## Final Closure Workflow
 
@@ -108,7 +83,8 @@
 1. Detection training and validation
    - `baseline -> fusion_main -> assigner_main -> temporal_main -> full_project`
 2. Tracking sequence inference and offline evaluation
-   - `tracking_base -> tracking_assoc -> tracking_temporal -> tracking_modality -> tracking_jointlite -> tracking_final`
+   - `tracking_base -> tracking_final`
+   - Run `tracking_eval` as the shared offline evaluation companion when you already have `tracking_results.json`.
 3. Unified result summarization
    - `python tools/summarize_results.py --experiments-root outputs/experiments --output-dir outputs/summary`
 4. Delivery material preparation

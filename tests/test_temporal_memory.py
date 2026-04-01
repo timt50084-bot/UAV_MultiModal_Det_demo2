@@ -1,3 +1,9 @@
+"""Compatibility tests for the legacy detector temporal-memory route.
+
+The maintained detection mainline uses two-frame temporal. These tests stay to
+guard archived configs and compatibility loading only.
+"""
+
 import unittest
 
 import torch
@@ -7,6 +13,8 @@ from src.model.temporal.temporal_memory import TemporalMemoryFusion
 
 
 class TemporalMemoryTestCase(unittest.TestCase):
+    """Legacy / compatibility coverage for detector temporal memory."""
+
     @classmethod
     def setUpClass(cls):
         _ensure_model_modules_registered()
@@ -98,6 +106,7 @@ class TemporalMemoryTestCase(unittest.TestCase):
         self.assertIsNotNone(model.temporal_fpn)
 
     def test_legacy_fusion_att_type_still_builds(self):
+        # Keep one explicit compatibility test for the deprecated fusion entry.
         model = build_model({
             "type": "YOLODualModalOBB",
             "num_classes": 1,

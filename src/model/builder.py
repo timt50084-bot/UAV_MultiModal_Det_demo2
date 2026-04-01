@@ -1,3 +1,12 @@
+"""Model builder for the active detector registry.
+
+The detector mainline is registered through YOLODualModalOBB with
+ReliabilityAwareFusion and two-frame temporal selected from configs/main/*.yaml.
+Legacy detector-side temporal memory is intentionally not imported here and is
+only lazy-loaded inside yolo_dual.py when an archived compatibility config asks
+for temporal.mode='memory'.
+"""
+
 from importlib import import_module
 
 from src.registry.model_registry import DETECTORS

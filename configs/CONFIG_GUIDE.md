@@ -4,7 +4,8 @@
 
 - Base defaults live in `configs/default.yaml`.
 - The only recommended day-to-day full-project training entry is `configs/main/full_project.yaml`.
-- For tracking day-to-day work, use `configs/main/tracking_base.yaml`, `configs/main/tracking_final.yaml`, or `configs/main/tracking_eval.yaml`.
+- For tracking day-to-day work, use `configs/main/tracking_base.yaml` or `configs/main/tracking_final.yaml`.
+- Use `configs/main/tracking_eval.yaml` only as the companion offline-evaluation config for precomputed tracking results.
 - Old `configs/exp_*.yaml` command lines are still accepted through loader redirects.
 
 ## Where to edit common training params
@@ -34,7 +35,8 @@ The detector ablation files under `configs/main/` inherit these common settings,
   Main active entry points.
   `full_project.yaml` is the recommended detector training config.
   `baseline.yaml`, `fusion_main.yaml`, `assigner_main.yaml`, and `temporal_main.yaml` are the detector ablation entry points.
-  `tracking_base.yaml`, `tracking_final.yaml`, and `tracking_eval.yaml` are the active tracking-side configs.
+  `tracking_base.yaml` and `tracking_final.yaml` are the active tracking mainline configs.
+  `tracking_eval.yaml` is the companion offline tracking-evaluation config.
 - `configs/archive/`
   Historical detector / eval / infer configs kept only for backward compatibility and reference.
   Archived tracking stage configs now live under `configs/archive/tracking/`.
@@ -46,6 +48,8 @@ The detector ablation files under `configs/main/` inherit these common settings,
 - Older root-level paths such as `configs/exp_baseline.yaml` and `configs/exp_tracking_final.yaml` still work.
 - The loader redirects those old paths to the new `configs/main/` or `configs/archive/` locations and prints a warning.
 - Legacy top-level fields like `batch_size`, `num_workers`, and `use_log_sampler` are still accepted, but startup warns and maps them into `dataloader.*`.
+- Legacy detection-side temporal-memory configs are still loadable for historical experiments and compatibility, but the maintained detector mainline uses `model.temporal.mode: two_frame`.
+- Legacy `fusion_att_type` is still accepted for compatibility, but maintained configs should use `model.fusion.type`.
 
 ## What not to edit for daily training
 
@@ -96,6 +100,7 @@ Use files under `configs/main/`:
 - `configs/main/tracking_base.yaml`
 - `configs/main/tracking_final.yaml`
 - `configs/main/tracking_eval.yaml`
+  Offline evaluation helper for existing tracking outputs, not a tracking mainline training / inference config.
 
 Archived stage-by-stage tracking configs are available under `configs/archive/tracking/` for historical experiments only.
 For backward compatibility, the old `configs/exp_tracking_*.yaml` command lines still resolve through redirects.

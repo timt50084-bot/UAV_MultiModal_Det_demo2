@@ -64,11 +64,17 @@ dataset:
         stripe_prob: 0.0
 
 # Detector model
+# The maintained detector mainline is defined in configs/main/full_project.yaml
+# with model.fusion.type=ReliabilityAwareFusion and model.temporal.mode=two_frame.
+# This base file keeps generic defaults and compatibility fields only so older
+# configs can still load without implying that detection temporal memory is the
+# current mainline.
 model:
   type: 'YOLODualModalOBB'
   num_classes: 5
   channels: [64, 128, 256, 512]
-  # Legacy compatibility field. New configs should use model.fusion.type.
+  # Legacy compatibility field only. Active detector configs should set this to
+  # null and use model.fusion.type instead.
   fusion_att_type: 'JCA'
   norm_type: 'GN'
   use_contrastive: False
@@ -211,6 +217,8 @@ tracking:
     sampling_radius: 1
     use_rgb_ir_branches: False
   memory:
+    # Tracking-side memory remains part of the tracking_final mainline. This is
+    # unrelated to the legacy detection-side temporal memory compatibility path.
     enabled: False
     size: 5
     fusion: 'weighted_mean'

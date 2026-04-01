@@ -48,6 +48,9 @@ class YOLODualModalOBB(nn.Module):
         temporal_enabled = temporal_cfg.get('enabled', temporal_enabled)
         temporal_mode = temporal_cfg.get('mode')
         if temporal_mode is None:
+            # The maintained detector mainline defaults to two-frame temporal
+            # whenever temporal is enabled. The memory route remains a legacy
+            # compatibility path for archived detection experiments only.
             temporal_mode = 'two_frame' if temporal_enabled else 'off'
         if temporal_mode not in {'off', 'two_frame', 'memory'}:
             raise ValueError(f"Unsupported temporal mode: {temporal_mode}")
@@ -71,6 +74,7 @@ class YOLODualModalOBB(nn.Module):
             fusion_cfg.setdefault('channel_list', self.channels)
             return FUSIONS.build(fusion_cfg)
 
+        # Keep the old fusion_att_type route as a thin compatibility layer only.
         fusion_type = LEGACY_FUSION_ALIASES.get(fusion_att_type, fusion_att_type)
         if fusion_type is None:
             fusion_type = 'DualStreamFusion'
@@ -84,6 +88,9 @@ class YOLODualModalOBB(nn.Module):
         return FUSIONS.build({'type': fusion_type, 'channel_list': self.channels})
 
     def _build_temporal_memory_fusion(self):
+        # Detection-side temporal memory is no longer the maintained mainline.
+        # Lazy import keeps historical experiments working without making it
+        # look like the default detector path in builder.py.
         warnings.warn(
             "Detection temporal mode 'memory' is deprecated; the maintained mainline uses model.temporal.mode='two_frame'.",
             DeprecationWarning,
@@ -188,6 +195,7 @@ class YOLODualModalOBB(nn.Module):
                 'temporal_maps': temporal_maps,
             }
         elif self.temporal_mode == 'memory':
+            # Compatibility-only branch for archived detection experiments.
             current_feats_before_temporal = enhanced_feats
             resolved_memory_steps = self._resolve_memory_steps(
                 memory_feats=memory_feats,
