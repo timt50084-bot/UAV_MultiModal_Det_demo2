@@ -5,13 +5,12 @@ import numpy as np
 import torch
 
 from src.data.dataloader import build_dataloader
-from src.engine.evaluator import Evaluator
+from src.engine.evaluator_factory import build_detection_evaluator
 from src.metrics.task_metrics import (
     describe_cross_modal_robustness,
     describe_detection_error_analysis,
     normalize_eval_metrics_cfg,
 )
-from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
 from src.tracking import TrackingEvaluator, normalize_tracking_cfg, normalize_tracking_eval_cfg
 from src.utils.config import load_config
@@ -122,7 +121,8 @@ def main():
     model = build_model(cfg.model).to(device)
     model.load_state_dict(torch.load(args.weights, map_location=device))
 
-    extra_metrics_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}) if hasattr(cfg, 'get') else {})
+    raw_eval_cfg = cfg.get('eval', {}) if hasattr(cfg, 'get') else {}
+    extra_metrics_cfg = normalize_eval_metrics_cfg(raw_eval_cfg)
     infer_cfg = normalize_infer_cfg(
         cfg.get('infer', {}) if hasattr(cfg, 'get') else {},
         default_imgsz=cfg.dataset.imgsz,
@@ -132,13 +132,12 @@ def main():
     print(f'Classwise thresholds: {describe_classwise_thresholds(infer_cfg.get("classwise_conf_thresholds", {}))}')
     print(f'Cross-modal robustness eval: {describe_cross_modal_robustness(extra_metrics_cfg.get("cross_modal_robustness", {}))}')
     print(f'Detection error analysis: {describe_detection_error_analysis(extra_metrics_cfg.get("error_analysis", {}))}')
-    metrics_evaluator = OBBMetricsEvaluator(num_classes=cfg.model.num_classes, extra_metrics_cfg=extra_metrics_cfg)
-    evaluator = Evaluator(
-        val_loader,
-        metrics_evaluator,
-        device,
+    evaluator = build_detection_evaluator(
+        dataloader=val_loader,
+        device=device,
+        num_classes=cfg.model.num_classes,
         nms_kwargs=cfg.val.nms,
-        extra_metrics_cfg=extra_metrics_cfg,
+        eval_cfg=raw_eval_cfg,
         infer_cfg=infer_cfg,
     )
 

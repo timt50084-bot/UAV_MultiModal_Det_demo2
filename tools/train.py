@@ -9,10 +9,9 @@ import torch
 from src.data.dataloader import build_dataloader
 from src.engine.callbacks.checkpoint_callback import CheckpointCallback
 from src.engine.callbacks.ema_callback import EMACallback
-from src.engine.evaluator import Evaluator
+from src.engine.evaluator_factory import build_detection_evaluator
 from src.engine.trainer import Trainer
 from src.loss.builder import build_assigner, build_loss
-from src.metrics.obb_metrics import OBBMetricsEvaluator
 from src.model.builder import build_model
 from src.utils.config import load_config
 from src.utils.config_utils import (
@@ -122,13 +121,12 @@ def main():
 
     extra_metrics_cfg = cfg.get('eval', {}) if hasattr(cfg, 'get') else {}
     infer_cfg = cfg.get('infer', {}) if hasattr(cfg, 'get') else {}
-    metrics_evaluator = OBBMetricsEvaluator(num_classes=cfg.model.num_classes, extra_metrics_cfg=extra_metrics_cfg)
-    evaluator = Evaluator(
-        val_loader,
-        metrics_evaluator,
-        device,
+    evaluator = build_detection_evaluator(
+        dataloader=val_loader,
+        device=device,
+        num_classes=cfg.model.num_classes,
         nms_kwargs=cfg.val.nms,
-        extra_metrics_cfg=extra_metrics_cfg,
+        eval_cfg=extra_metrics_cfg,
         infer_cfg=infer_cfg,
     )
 
@@ -152,6 +150,7 @@ def main():
         evaluator=evaluator,
         callbacks=callbacks,
         performance_cfg=cfg.get('performance', {}) if hasattr(cfg, 'get') else {},
+        eval_interval=cfg.train.get('eval_interval', 1),
     )
 
     print('\nStarting training loop...')

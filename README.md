@@ -130,6 +130,7 @@ python tools/prepare_dronevehicle_dataset.py \
 
 - 主流程依赖 RGB / IR 文件名 stem 对齐，双模态图像需要一一对应。
 - 双帧 temporal 检测和 `tracking_final` 中的 tracking memory 逻辑会按序列顺序读取相邻帧，目录内文件命名和排序应保持稳定。
+- `dataset.root_dir` 主线保持为 `dataset/DroneVehicle_process`；训练 / 验证时会按仓库根目录归一化这个相对路径，因此不从 repo 根目录启动也不会直接丢失主线数据目录。
 - 如果你不确定自己的原始数据是否符合脚本假设，先看 `tools/prepare_dronevehicle_dataset.py` 和 `src/data/datasets/drone_rgb_ir.py`，不要直接猜目录格式。
 
 ## 配置系统说明
@@ -165,6 +166,8 @@ python tools/prepare_dronevehicle_dataset.py \
 - `configs/archive/`
   - 历史实验和兼容配置。可以复现旧实验，但不建议作为日常入口。
 
+这些 `configs/main/*.yaml` 主线入口默认继承 `full_project.yaml` 的数据路径和训练日程，除非文件内显式覆盖。
+
 ### 3. 现在常用参数建议改哪里
 
 高频参数建议直接在 `configs/main/full_project.yaml` 中修改：
@@ -173,11 +176,28 @@ python tools/prepare_dronevehicle_dataset.py \
 - `dataloader.num_workers`
 - `dataset.imgsz`
 - `train.epochs`
+- `train.patience`
+- `train.eval_interval`
 - `train.lr`
 - `train.accumulate`
+- `train.use_amp`
 - `performance.profile_train`
 
 当前这轮整理后，高常用 loader 和训练参数的规范入口已经统一到了主配置，不需要再去翻多层历史实验配置。
+
+当前 `full_project` 主线默认值是：
+
+- `dataset.root_dir: dataset/DroneVehicle_process`
+- `dataloader.batch_size: 4`
+- `dataset.imgsz: 1024`
+- `train.epochs: 300`
+- `train.patience: 50`
+- `train.eval_interval: 5`
+- `train.lr: 0.0003`
+- `train.use_amp: False`
+
+如果 `1024` 对当前设备压力过大，不建议偷偷改小主线默认值；优先在命令行临时覆盖 `dataset.imgsz=960` 或 `dataset.imgsz=800`。
+`train.eval_interval` 控制训练期间的自动验证频率，最后一轮会强制验证一次。early stopping 的 `patience` 仍按训练 epoch 计数，只是在发生验证的 epoch 上检查是否触发。
 
 如果你还需要进一步调数据加载性能，也优先看：
 
@@ -230,7 +250,7 @@ python tools/train.py --config configs/main/full_project.yaml --device 0
 python tools/train.py --config configs/main/full_project.yaml --device 0
 ```
 
-如果你只想验证配置链路，也可以先把 `dataloader.batch_size` 调小、`dataset.imgsz` 调低后再跑。
+如果你只想验证配置链路，也可以先把 `dataloader.batch_size` 调小，或临时把 `dataset.imgsz` 降到 `960` / `800` / `640` 后再跑。
 
 ### 3. 验证
 
@@ -325,7 +345,7 @@ outputs/
 训练日志里优先关注：
 
 - 启动时打印的 effective config 摘要
-- 每个 epoch 的训练损失和验证指标
+- 每个 epoch 的训练损失，以及按 `train.eval_interval` 触发的验证指标（最后一轮强制验证）
 - `mAP_50`、`mAP_50_95`、`mAP_S`
 - 配置兼容 warning 或数据路径 warning
 
@@ -340,12 +360,13 @@ outputs/
 
 - 把 `train.epochs` 改成 `1`
 - 把 `dataloader.batch_size` 调到显存能稳定承受的值
-- 先用 `dataset.imgsz: 640` 或更低分辨率
+- 主线默认是 `dataset.imgsz: 1024`；快速试跑时可临时降到 `960` / `800` / `640`
 - 必要时暂时把 `dataloader.num_workers` 调低，先确认环境和数据链路没问题
 
 ## 当前状态与注意事项
 
 - 当前检测主线推荐入口是 `configs/main/full_project.yaml`，对应 RGB+IR 双流、`ReliabilityAwareFusion`、`two_frame` temporal 和 OBB detection。
+- `full_project` 当前默认训练参数是 `batch_size=4`、`imgsz=1024`、`epochs=300`、`patience=50`、`eval_interval=5`、`lr=0.0003`、`use_amp=False`；dataset 主线路径保持 `dataset/DroneVehicle_process`。
 - `configs/main/` 下的其他检测配置主要用于模块消融和专项实验。
 - 当前 tracking 主入口只突出 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；`configs/main/tracking_eval.yaml` 是配套的离线评估配置。
 - detection 侧 temporal memory 仅保留为历史实验 / 兼容路径，不再代表检测主线；tracking 侧 memory 仍然是 `tracking_final` 的有效能力。

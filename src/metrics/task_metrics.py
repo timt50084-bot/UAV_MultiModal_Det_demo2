@@ -1,5 +1,7 @@
 from collections.abc import Mapping
 
+from src.metrics.obb_iou_backend import normalize_obb_iou_backend_name
+
 try:
     from omegaconf import OmegaConf
 except ImportError:  # pragma: no cover - optional at import time in some test environments
@@ -93,9 +95,16 @@ def normalize_eval_metrics_cfg(cfg):
             ),
         ),
     )
+    obb_iou_backend = normalize_obb_iou_backend_name(
+        root_cfg.get(
+            'obb_iou_backend',
+            nested_cfg.get('obb_iou_backend', 'cpu_polygon'),
+        )
+    )
 
     return {
         'enabled': bool(enabled),
+        'obb_iou_backend': obb_iou_backend,
         'small_object': small_object,
         'cross_modal_robustness': cross_modal,
         'temporal_stability': temporal,

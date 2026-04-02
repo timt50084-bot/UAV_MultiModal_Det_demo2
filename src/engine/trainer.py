@@ -2,8 +2,7 @@ import re
 import time
 
 import torch
-from torch.amp import autocast
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from src.model.bbox_utils import make_anchors, normalize_anchor_points
@@ -70,7 +69,7 @@ class TrainTimingProfile:
 class Trainer:
     def __init__(self, model, train_loader, optimizer, scheduler, criterion, assigner,
                  device, epochs, accumulate=1, grad_clip=10.0, use_amp=True, evaluator=None, callbacks=None,
-                 performance_cfg=None):
+                 performance_cfg=None, eval_interval=1):
         self.model = model
         self.train_loader = train_loader
         self.optimizer = optimizer
@@ -82,6 +81,7 @@ class Trainer:
         self.accumulate = max(1, accumulate)
         self.grad_clip = grad_clip
         self.use_amp = bool(use_amp and self.device.type == 'cuda')
+        self.eval_interval = max(1, int(eval_interval))
         self.performance_cfg = dict(performance_cfg or {})
         self.progress_log_interval = max(1, int(self.performance_cfg.get('log_interval', 10)))
         self.profile_train = bool(self.performance_cfg.get('profile_train', False))
@@ -92,12 +92,13 @@ class Trainer:
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.scaler = GradScaler(self.device.type, enabled=self.use_amp)
         self._anchor_cache = {}
         self._debug_zero_pos_count = 0
 
         self.current_epoch = 0
         self.current_metrics = None
+        self.did_validate_this_epoch = False
         self.stop_training = False
 
         self._bind_callbacks()
@@ -239,6 +240,12 @@ class Trainer:
             loss_value = 0.0
         return f"{loss_value:.4f}"
 
+    def _should_run_evaluation(self, epoch):
+        if not self.evaluator:
+            return False
+        epoch_number = epoch + 1
+        return (epoch_number % self.eval_interval == 0) or (epoch_number == self.epochs)
+
     def format_targets(self, targets, batch_size):
         if targets.numel() == 0:
             gt_labels = torch.zeros((batch_size, 0, 1), device=self.device)
@@ -274,8 +281,9 @@ class Trainer:
             self.current_epoch = epoch
 
             self.model.train()
-            if hasattr(self.train_loader.dataset, 'set_epoch'):
-                self.train_loader.dataset.set_epoch(epoch, self.epochs)
+            train_dataset = getattr(self.train_loader, 'dataset', None)
+            if hasattr(train_dataset, 'set_epoch'):
+                train_dataset.set_epoch(epoch, self.epochs)
 
             self.trigger_callbacks('on_epoch_begin')
 
@@ -459,12 +467,15 @@ class Trainer:
             self.scheduler.step()
 
             eval_time = None
-            if self.evaluator:
+            self.current_metrics = None
+            self.did_validate_this_epoch = False
+            if self._should_run_evaluation(epoch):
                 eval_model = getattr(self, 'ema_callback').ema if hasattr(self, 'ema_callback') else self.model
                 eval_start = self._profile_stamp() if self.profile_train else time.perf_counter()
                 self.current_metrics = self.evaluator.evaluate(eval_model, epoch=epoch + 1)
                 eval_end = self._profile_stamp() if self.profile_train else time.perf_counter()
                 eval_time = eval_end - eval_start
+                self.did_validate_this_epoch = True
 
             if timing_profile.has_samples():
                 print(f"\n{timing_profile.format_summary(epoch + 1, eval_time=eval_time)}")

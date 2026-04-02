@@ -107,6 +107,9 @@ loss:
 # Training and validation
 train:
   epochs: 100
+  # Validation cadence. The final epoch always validates even if it does not
+  # land on the interval boundary.
+  eval_interval: 1
   lr: 0.001
   weight_decay: 0.0005
   lrf: 0.01
@@ -135,6 +138,16 @@ val:
     max_wh: 4096.0
 
 eval:
+  # Detection evaluator selector. `gpu` is the only maintained detection
+  # mainline. `cpu` is retained only as the reference / fallback path. On
+  # non-CUDA devices, the factory warns and safely falls back to the CPU
+  # reference evaluator instead of breaking CPU-only runs and lightweight CI.
+  evaluator: 'gpu'
+  # Detection-side OBB IoU backend selector. `gpu_prob` is the default backend
+  # paired with the GPU evaluator, but it remains a ProbIoU surrogate rather
+  # than exact polygon IoU. The CPU evaluator is reference-only and always
+  # resolves to `cpu_polygon`.
+  obb_iou_backend: 'gpu_prob'
   small_object:
     # Optional small-object metrics. When disabled, validation stops emitting
     # mAP_S / Recall_S / Precision_S so the metrics dict matches the config.

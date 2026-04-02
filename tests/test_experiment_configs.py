@@ -1,12 +1,22 @@
 import unittest
 from pathlib import Path
 
-from src.loss.builder import build_assigner
-from src.model.builder import build_model
-from src.utils.config import load_config
-from src.utils.config_utils import apply_experiment_runtime_overrides
+try:
+    from src.loss.builder import build_assigner
+    from src.model.builder import build_model
+    from src.utils.config import load_config
+    from src.utils.config_utils import apply_experiment_runtime_overrides
+except ImportError:  # pragma: no cover - optional in lightweight test envs
+    build_assigner = None
+    build_model = None
+    load_config = None
+    apply_experiment_runtime_overrides = None
 
 
+@unittest.skipUnless(
+    all(item is not None for item in (build_assigner, build_model, load_config, apply_experiment_runtime_overrides)),
+    'config smoke tests require the training config stack and model dependencies',
+)
 class ExperimentConfigSmokeTestCase(unittest.TestCase):
     def _load_and_build(self, config_path):
         cfg = load_config(config_path)
@@ -43,6 +53,15 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
     def test_full_project_config_loads(self):
         cfg = self._load_and_build('configs/exp_full_project.yaml')
         self.assertEqual(cfg.experiment.name, 'full_project')
+        self.assertEqual(cfg.eval.evaluator, 'gpu')
+        self.assertEqual(cfg.eval.obb_iou_backend, 'gpu_prob')
+        self.assertEqual(cfg.dataset.root_dir, 'dataset/DroneVehicle_process')
+        self.assertEqual(cfg.dataset.imgsz, 1024)
+        self.assertEqual(cfg.train.epochs, 300)
+        self.assertEqual(cfg.train.patience, 50)
+        self.assertEqual(cfg.train.eval_interval, 5)
+        self.assertAlmostEqual(float(cfg.train.lr), 0.0003, places=7)
+        self.assertFalse(bool(cfg.train.use_amp))
         self.assertEqual(cfg.model.temporal.mode, 'two_frame')
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
 

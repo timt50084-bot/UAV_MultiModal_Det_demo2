@@ -16,6 +16,9 @@ except ImportError:  # pragma: no cover
     OmegaConf = None
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def _ensure_data_modules_registered():
     import_module('src.data.datasets.drone_rgb_ir')
 
@@ -46,6 +49,21 @@ def _clone_dataloader_cfg(cfg):
     if hasattr(dataloader_cfg, 'items'):
         return dict(dataloader_cfg.items())
     return {}
+
+
+def _resolve_dataset_root_dir(root_dir):
+    if root_dir in (None, ''):
+        return root_dir
+
+    root_path = Path(str(root_dir)).expanduser()
+    if root_path.is_absolute():
+        return str(root_path)
+
+    repo_candidate = (REPO_ROOT / root_path).resolve()
+    cwd_candidate = (Path.cwd() / root_path).resolve()
+    if repo_candidate.exists() or not cwd_candidate.exists():
+        return str(repo_candidate)
+    return str(cwd_candidate)
 
 
 def create_small_object_sampler(label_dir, dataset_len, small_threshold=0.05):
@@ -102,6 +120,8 @@ def build_dataloader(cfg, is_training=True):
     dataloader_cfg = _clone_dataloader_cfg(cfg)
     performance_cfg = _clone_performance_cfg(cfg)
     dataloader_perf_cfg = performance_cfg.get('dataloader', {}) if isinstance(performance_cfg, dict) else {}
+    if 'root_dir' in dataset_cfg:
+        dataset_cfg['root_dir'] = _resolve_dataset_root_dir(dataset_cfg.get('root_dir'))
     dataset_cfg['split'] = 'train' if is_training else 'val'
     dataset_cfg['is_training'] = is_training
     model_cfg = cfg.get('model', {}) if hasattr(cfg, 'get') else {}

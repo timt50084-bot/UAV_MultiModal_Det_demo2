@@ -226,6 +226,7 @@ def _append_misplaced_field_warnings(cfg, meta):
         ('imgsz', 'dataset.imgsz'),
         ('img_size', 'dataset.imgsz'),
         ('epochs', 'train.epochs'),
+        ('eval_interval', 'train.eval_interval'),
         ('lr', 'train.lr'),
         ('weight_decay', 'train.weight_decay'),
         ('accumulate', 'train.accumulate'),
@@ -278,6 +279,11 @@ def _normalize_config(cfg, layers):
         {
             'canonical': 'train.epochs',
             'aliases': [],
+        },
+        {
+            'canonical': 'train.eval_interval',
+            'aliases': [],
+            'default': 1,
         },
         {
             'canonical': 'train.lr',

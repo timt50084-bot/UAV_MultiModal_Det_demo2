@@ -123,7 +123,7 @@ class ProjectPipelineSmokeTestCase(unittest.TestCase):
                 patch('tools.val.build_dataloader', return_value=(loader, None)), \
                 patch('tools.val.build_model', return_value=DummyModel()), \
                 patch('tools.val.torch.load', return_value={}), \
-                patch('tools.val.Evaluator', FakeEvaluator), \
+                patch('tools.val.build_detection_evaluator', return_value=FakeEvaluator()), \
                 patch('tools.val.TrackingEvaluator', FakeTrackingEvaluator), \
                 patch('sys.stdout', stdout):
             val_tool.main()

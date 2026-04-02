@@ -12,18 +12,22 @@ dataloader:
   pin_memory: True
 
 dataset:
-  root_dir: '/root/dataset/DroneVehicle_Processed'
-  imgsz: 640
+  root_dir: 'dataset/DroneVehicle_process'
+  # Mainline stays at 1024. If memory or throughput becomes a real constraint,
+  # override at runtime with `dataset.imgsz=960` or `dataset.imgsz=800`.
+  imgsz: 1024
 
 train:
   # Device selection stays in the CLI: `python tools/train.py --device 0`
-  epochs: 100
+  epochs: 300
   patience: 50
-  lr: 0.001
+  # Validation runs every N training epochs; the final epoch always validates.
+  eval_interval: 5
+  lr: 0.0003
   weight_decay: 0.0005
   lrf: 0.01
   accumulate: 16
-  use_amp: True
+  use_amp: False
   grad_clip: 10.0
   save_dir: 'outputs/weights'
 

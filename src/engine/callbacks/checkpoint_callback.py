@@ -23,10 +23,11 @@ class CheckpointCallback(Callback):
             if hasattr(trainer, 'ema_callback') and trainer.ema_callback
             else trainer.model
         )
+        validated_this_epoch = getattr(trainer, 'did_validate_this_epoch', True)
 
         torch.save(model_to_save.state_dict(), os.path.join(self.save_dir, 'latest.pt'))
 
-        if trainer.current_metrics:
+        if validated_this_epoch and trainer.current_metrics:
             primary_metric = float(trainer.current_metrics.get(self.monitor, 0.0))
             if 'mAP_S' in trainer.current_metrics:
                 fitness = primary_metric * 0.1 + float(trainer.current_metrics['mAP_S']) * 0.9

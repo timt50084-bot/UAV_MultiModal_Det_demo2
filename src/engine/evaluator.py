@@ -111,6 +111,10 @@ class Evaluator:
             batch_gts.append(padded[batch_idx, :count].cpu())
         return batch_gts
 
+    def _prepare_metrics_batch(self, preds, targets, batch_size):
+        batch_gts = self._targets_to_batch_gts(targets, batch_size)
+        return [pred.cpu() for pred in preds], batch_gts
+
     def _snapshot_eval_artifacts(self):
         return {
             'preds': deepcopy(getattr(self.metrics_evaluator, 'preds', [])),
@@ -218,12 +222,10 @@ class Evaluator:
             t2 = time.time()
             t3 = t2
 
-            batch_gts = self._targets_to_batch_gts(targets, eval_rgb.shape[0])
-
             image_ids, batch_metadata = self._build_image_ids_and_metadata(epoch, batch_idx, eval_rgb.shape[0], sample_offset)
-            preds = [pred.cpu() for pred in preds]
+            preds_for_metrics, batch_gts = self._prepare_metrics_batch(preds, targets, eval_rgb.shape[0])
 
-            self.metrics_evaluator.add_batch(image_ids, preds, batch_gts, batch_metadata=batch_metadata)
+            self.metrics_evaluator.add_batch(image_ids, preds_for_metrics, batch_gts, batch_metadata=batch_metadata)
             sample_offset += eval_rgb.shape[0]
             if rgb_drop_mode is None and ir_drop_mode is None:
                 pbar.set_postfix({"infer(ms)": f"{(t2 - t1) * 1000:.1f}", "nms(ms)": f"{(t3 - t2) * 1000:.1f}"})
@@ -295,3 +297,34 @@ class Evaluator:
 
         model.train()
         return metrics
+
+
+class GPUDetectionEvaluator(Evaluator):
+    """Thin GPU evaluator wrapper that keeps batch predictions/targets on CUDA for metrics."""
+
+    @staticmethod
+    def _targets_to_batch_gts_device(targets, batch_size, device):
+        if targets.numel() == 0:
+            return [torch.zeros((0, 6), dtype=torch.float32, device=device) for _ in range(batch_size)]
+
+        targets = targets.to(device, non_blocking=True)
+        gt_counts = torch.bincount(targets[:, 0].long(), minlength=batch_size)
+        max_gts = int(gt_counts.max().item())
+        padded = torch.zeros((batch_size, max_gts, 6), dtype=torch.float32, device=device)
+        write_positions = torch.zeros(batch_size, dtype=torch.long, device=device)
+
+        for target in targets:
+            batch_idx = int(target[0].item())
+            position = write_positions[batch_idx]
+            padded[batch_idx, position, :] = target[1:7]
+            write_positions[batch_idx] += 1
+
+        batch_gts = []
+        for batch_idx in range(batch_size):
+            count = int(gt_counts[batch_idx].item())
+            batch_gts.append(padded[batch_idx, :count])
+        return batch_gts
+
+    def _prepare_metrics_batch(self, preds, targets, batch_size):
+        batch_gts = self._targets_to_batch_gts_device(targets, batch_size, self.device)
+        return preds, batch_gts
