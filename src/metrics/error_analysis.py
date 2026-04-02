@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import numpy as np
 
-from src.metrics.obb_metrics import polygon_iou
+from src.metrics.obb_iou_backend import polygon_iou
 from src.metrics.task_metrics import normalize_eval_metrics_cfg
 from src.metrics.task_specific_metrics import (
     angle_distance,

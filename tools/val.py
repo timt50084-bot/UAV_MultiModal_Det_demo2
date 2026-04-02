@@ -15,6 +15,7 @@ from src.model.builder import build_model
 from src.tracking import TrackingEvaluator, normalize_tracking_cfg, normalize_tracking_eval_cfg
 from src.utils.config import load_config
 from src.utils.config_utils import apply_experiment_runtime_overrides
+from src.utils.detection_cuda import resolve_detection_device
 from src.utils.postprocess_tuning import describe_classwise_thresholds, describe_tta_settings, normalize_infer_cfg
 
 
@@ -34,7 +35,7 @@ def parse_args(argv=None):
     )
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
     parser.add_argument('--weights', type=str, default='', help='Checkpoint to validate. Required for detection validation unless tracking_eval.results_path is used.')
-    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
+    parser.add_argument('--device', type=int, default=0, help='CUDA device id for detection validation.')
     return parser.parse_known_args(argv)
 
 
@@ -99,7 +100,7 @@ def main():
     if not args.weights:
         raise ValueError('--weights is required for detection validation unless tracking_eval.results_path is provided.')
 
-    device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
+    device = resolve_detection_device(args.device)
     print(f'\nValidation device: {device}')
     print(f'Experiment name: {run_name}')
 

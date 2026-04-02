@@ -14,14 +14,12 @@ except ImportError:  # pragma: no cover - optional in config-only test environme
     torch = None
     batch_prob_iou = None
 
+from src.utils.detection_cuda import DETECTION_CUDA_REQUIRED_MESSAGE
 
-OBB_IOU_BACKEND_CPU_POLYGON = 'cpu_polygon'
+
 OBB_IOU_BACKEND_GPU_PROB = 'gpu_prob'
 
 _OBB_IOU_BACKEND_ALIASES = {
-    'cpu': OBB_IOU_BACKEND_CPU_POLYGON,
-    'polygon': OBB_IOU_BACKEND_CPU_POLYGON,
-    'cpu_polygon': OBB_IOU_BACKEND_CPU_POLYGON,
     'gpu': OBB_IOU_BACKEND_GPU_PROB,
     'prob': OBB_IOU_BACKEND_GPU_PROB,
     'prob_iou': OBB_IOU_BACKEND_GPU_PROB,
@@ -30,20 +28,20 @@ _OBB_IOU_BACKEND_ALIASES = {
 
 
 def normalize_obb_iou_backend_name(name):
-    backend = str(name or OBB_IOU_BACKEND_CPU_POLYGON).strip().lower()
-    return _OBB_IOU_BACKEND_ALIASES.get(backend, backend or OBB_IOU_BACKEND_CPU_POLYGON)
+    backend = str(name or OBB_IOU_BACKEND_GPU_PROB).strip().lower()
+    return _OBB_IOU_BACKEND_ALIASES.get(backend, backend or OBB_IOU_BACKEND_GPU_PROB)
 
 
 def resolve_obb_iou_backend_name(cfg=None):
     if isinstance(cfg, Mapping):
-        return normalize_obb_iou_backend_name(cfg.get('obb_iou_backend', OBB_IOU_BACKEND_CPU_POLYGON))
+        return normalize_obb_iou_backend_name(cfg.get('obb_iou_backend', OBB_IOU_BACKEND_GPU_PROB))
     return normalize_obb_iou_backend_name(cfg)
 
 
 def obb2polygon(obb):
     if Polygon is None:
         raise RuntimeError(
-            "OBB IoU backend 'cpu_polygon' requires shapely, but shapely is not available in the current environment."
+            'Exact polygon analysis requires shapely, but shapely is not available in the current environment.'
         )
     cx, cy, w, h, theta = obb
     cos_t, sin_t = np.cos(theta), np.sin(theta)
@@ -105,29 +103,21 @@ def _normalize_obb_array(boxes):
     return np.reshape(array, (-1, 5)).astype(np.float32)
 
 
-class CPUPolygonIoUBackend:
-    name = OBB_IOU_BACKEND_CPU_POLYGON
-    is_exact = True
-    supports_tensor_matching = False
-    description = 'Exact CPU polygon IoU via shapely intersection/union.'
+def _normalize_obb_tensor(boxes, device):
+    if torch is None:
+        raise RuntimeError("Torch is required to normalize OBB tensors for the GPU IoU backend.")
 
-    def __init__(self):
-        self.poly_cache = {}
+    if boxes is None:
+        return torch.empty((0, 5), dtype=torch.float32, device=device)
+    if isinstance(boxes, torch.Tensor):
+        if boxes.numel() == 0:
+            return torch.empty((0, 5), dtype=torch.float32, device=device)
+        return boxes.to(device=device, dtype=torch.float32).reshape(-1, 5)
 
-    def pair_iou(self, box_a, box_b):
-        return float(polygon_iou(box_a, box_b, self.poly_cache))
-
-    def pairwise_iou(self, boxes_a, boxes_b):
-        boxes_a = _normalize_obb_array(boxes_a)
-        boxes_b = _normalize_obb_array(boxes_b)
-        if boxes_a.shape[0] == 0 or boxes_b.shape[0] == 0:
-            return np.zeros((boxes_a.shape[0], boxes_b.shape[0]), dtype=np.float32)
-
-        output = np.zeros((boxes_a.shape[0], boxes_b.shape[0]), dtype=np.float32)
-        for row_idx, box_a in enumerate(boxes_a):
-            for col_idx, box_b in enumerate(boxes_b):
-                output[row_idx, col_idx] = self.pair_iou(box_a, box_b)
-        return output
+    array = _normalize_obb_array(boxes)
+    if array.size == 0:
+        return torch.empty((0, 5), dtype=torch.float32, device=device)
+    return torch.as_tensor(array, dtype=torch.float32, device=device)
 
 
 class GPUProbIoUBackend:
@@ -140,12 +130,11 @@ class GPUProbIoUBackend:
         if torch is None or batch_prob_iou is None:
             raise RuntimeError(
                 "OBB IoU backend 'gpu_prob' requires torch and the existing batch_prob_iou implementation, "
-                "but torch is not available in the current environment."
+                'but torch is not available in the current environment.'
             )
         if not torch.cuda.is_available():
             raise RuntimeError(
-                "OBB IoU backend 'gpu_prob' requires CUDA, but torch.cuda.is_available() is False. "
-                "Keep eval.obb_iou_backend=cpu_polygon or run on a CUDA-enabled environment."
+                f"OBB IoU backend 'gpu_prob' requires CUDA. {DETECTION_CUDA_REQUIRED_MESSAGE}"
             )
         self.device = torch.device(device or 'cuda')
 
@@ -156,13 +145,11 @@ class GPUProbIoUBackend:
         return self.pairwise_iou_tensor(boxes_a, boxes_b).detach().cpu().numpy().astype(np.float32)
 
     def pairwise_iou_tensor(self, boxes_a, boxes_b):
-        boxes_a = _normalize_obb_array(boxes_a)
-        boxes_b = _normalize_obb_array(boxes_b)
-        if boxes_a.shape[0] == 0 or boxes_b.shape[0] == 0:
-            return torch.empty((boxes_a.shape[0], boxes_b.shape[0]), dtype=torch.float32, device=self.device)
+        tensor_a = _normalize_obb_tensor(boxes_a, self.device)
+        tensor_b = _normalize_obb_tensor(boxes_b, self.device)
+        if tensor_a.shape[0] == 0 or tensor_b.shape[0] == 0:
+            return torch.empty((tensor_a.shape[0], tensor_b.shape[0]), dtype=torch.float32, device=self.device)
 
-        tensor_a = torch.as_tensor(boxes_a, dtype=torch.float32, device=self.device)
-        tensor_b = torch.as_tensor(boxes_b, dtype=torch.float32, device=self.device)
         merged = torch.cat([tensor_a, tensor_b], dim=0)
         prob_matrix = batch_prob_iou(merged)
         split = tensor_a.shape[0]
@@ -171,11 +158,9 @@ class GPUProbIoUBackend:
 
 def build_obb_iou_backend(cfg=None, device=None):
     backend_name = resolve_obb_iou_backend_name(cfg)
-    if backend_name == OBB_IOU_BACKEND_CPU_POLYGON:
-        return CPUPolygonIoUBackend()
     if backend_name == OBB_IOU_BACKEND_GPU_PROB:
         return GPUProbIoUBackend(device=device)
     raise ValueError(
         f"Unsupported OBB IoU backend '{backend_name}'. "
-        f"Supported backends: {OBB_IOU_BACKEND_CPU_POLYGON}, {OBB_IOU_BACKEND_GPU_PROB}."
+        "Detection now only supports eval.obb_iou_backend='gpu_prob'."
     )

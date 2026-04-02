@@ -47,21 +47,10 @@ Current `full_project.yaml` mainline defaults:
 If `1024` is too expensive on the current machine, keep the mainline default and override at runtime with `dataset.imgsz=960` or `dataset.imgsz=800`.
 Dataset-relative paths are normalized against the repo root at dataloader build time, so `dataset/DroneVehicle_process` remains valid even when training is launched outside the repo root.
 `train.eval_interval` controls auto-validation frequency during training; the final epoch always validates. Early stopping patience still counts training epochs and is checked on validation epochs.
-Detection validation now defaults to `eval.evaluator=gpu` together with `eval.obb_iou_backend=gpu_prob` on CUDA-capable runs. That path uses the Stage 3 GPU evaluator for the base detection metrics path.
-`gpu_prob` remains a ProbIoU surrogate rather than exact shapely polygon IoU. The CPU reference path is still supported and remains the parity / regression baseline:
-
-- `eval.evaluator=cpu`
-- `eval.obb_iou_backend=cpu_polygon`
-
-GPU is now the only maintained detection mainline. The CPU evaluator is no longer a parallel mainline path; it is retained only for explicit reference runs, non-CUDA fallback, and CPU-only analysis compatibility.
-When the active device is not CUDA, the detection evaluator factory prints a warning and safely falls back to the CPU reference path instead of failing the run. This keeps CPU-only validation, lightweight CI, and `--device -1` workflows usable after the default switch.
-`tools/compare_detection_evaluators.py` remains the recommended regression guard after the default switch. It still compares `cpu + cpu_polygon` against `gpu + gpu_prob` explicitly on the same checkpoint and validation set.
-To pin the reference path explicitly, override:
-
-- `eval.evaluator=cpu`
-- `eval.obb_iou_backend=cpu_polygon`
-
-If `eval.evaluator=cpu` is paired with any non-reference OBB IoU backend, the runtime now coerces it back to `cpu_polygon` with a warning instead of preserving a mixed CPU/GPU transition mode.
+Detection validation now uses a single maintained path: `eval.evaluator=gpu` together with `eval.obb_iou_backend=gpu_prob`.
+`gpu_prob` remains a ProbIoU surrogate rather than exact shapely polygon IoU.
+CPU detection reference, CPU evaluator fallback, and CPU/GPU comparison tooling have been removed from the detection runtime.
+When the active device is not CUDA, detection training / validation / inference now fails explicitly with: `This detection path requires CUDA. CPU detection reference has been removed.`
 
 ## Directory layout
 

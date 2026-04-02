@@ -138,15 +138,12 @@ val:
     max_wh: 4096.0
 
 eval:
-  # Detection evaluator selector. `gpu` is the only maintained detection
-  # mainline. `cpu` is retained only as the reference / fallback path. On
-  # non-CUDA devices, the factory warns and safely falls back to the CPU
-  # reference evaluator instead of breaking CPU-only runs and lightweight CI.
+  # Detection evaluator selector. CUDA-backed `gpu` is the only supported
+  # detection evaluator path.
   evaluator: 'gpu'
-  # Detection-side OBB IoU backend selector. `gpu_prob` is the default backend
-  # paired with the GPU evaluator, but it remains a ProbIoU surrogate rather
-  # than exact polygon IoU. The CPU evaluator is reference-only and always
-  # resolves to `cpu_polygon`.
+  # Detection-side OBB IoU backend selector. `gpu_prob` is the only supported
+  # detection backend and remains a ProbIoU surrogate rather than exact polygon
+  # IoU.
   obb_iou_backend: 'gpu_prob'
   small_object:
     # Optional small-object metrics. When disabled, validation stops emitting

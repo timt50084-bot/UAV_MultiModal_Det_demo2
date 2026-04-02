@@ -19,6 +19,7 @@ from src.utils.config_utils import (
     format_effective_train_config_summary,
     save_resolved_config,
 )
+from src.utils.detection_cuda import resolve_detection_device
 
 
 def set_seed(seed=42):
@@ -31,7 +32,7 @@ def set_seed(seed=42):
 def parse_args():
     parser = argparse.ArgumentParser(description='Train the dual-modal OBB detector.')
     parser.add_argument('--config', type=str, default='configs/default.yaml', help='Path to the config file.')
-    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
+    parser.add_argument('--device', type=int, default=0, help='CUDA device id for the detection mainline.')
     parser.add_argument('--resume', type=str, default='', help='Optional checkpoint to resume from.')
     return parser.parse_known_args()
 
@@ -42,7 +43,7 @@ def main():
     cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
     resolved_config_path = save_resolved_config(cfg, run_name)
 
-    device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
+    device = resolve_detection_device(args.device)
     print(f'\nTraining device: {device}')
     print(f'Experiment name: {run_name}')
     print(

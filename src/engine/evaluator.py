@@ -4,7 +4,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from torch.amp import autocast
 from tqdm import tqdm
 
 from src.metrics.error_analysis import ErrorAnalyzer
@@ -14,6 +13,7 @@ from src.model.bbox_utils import non_max_suppression_obb
 from src.model.output_adapter import flatten_predictions
 from src.utils.postprocess_tuning import apply_classwise_thresholds, normalize_infer_cfg
 from src.utils.result_merge import merge_obb_predictions
+from src.utils.torch_amp import autocast
 from src.utils.tta import apply_tta_transforms, build_tta_transforms, invert_tta_predictions
 
 

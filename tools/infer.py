@@ -20,6 +20,7 @@ from src.tracking import (
 )
 from src.utils.config import load_config
 from src.utils.config_utils import apply_experiment_runtime_overrides
+from src.utils.detection_cuda import resolve_detection_device
 from src.utils.postprocess_tuning import (
     apply_classwise_thresholds,
     describe_classwise_thresholds,
@@ -306,12 +307,12 @@ def main():
     parser.add_argument('--prev_ir', type=str, default='', help='Optional previous IR frame used to bootstrap temporal inference.')
     parser.add_argument('--save_dir', type=str, default='outputs/detect', help='Directory to write visualizations and optional tracking JSON.')
     parser.add_argument('--heatmap', action='store_true', help='Save the first available attention heatmap overlay.')
-    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
+    parser.add_argument('--device', type=int, default=0, help='CUDA device id for detection inference.')
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     cfg, run_name = apply_experiment_runtime_overrides(cfg, config_path=args.config)
-    device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
+    device = resolve_detection_device(args.device)
     infer_cfg = normalize_infer_cfg(cfg.get('infer', {}), default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)
     tracking_cfg = normalize_tracking_cfg(cfg.get('tracking', {}))
 

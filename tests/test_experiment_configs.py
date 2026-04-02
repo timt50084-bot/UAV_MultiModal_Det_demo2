@@ -55,7 +55,7 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         self.assertEqual(cfg.experiment.name, 'full_project')
         self.assertEqual(cfg.eval.evaluator, 'gpu')
         self.assertEqual(cfg.eval.obb_iou_backend, 'gpu_prob')
-        self.assertEqual(cfg.dataset.root_dir, 'dataset/DroneVehicle_process')
+        self.assertEqual(cfg.dataset.root_dir, '/root/dataset/DroneVehicle_Processed')
         self.assertEqual(cfg.dataset.imgsz, 1024)
         self.assertEqual(cfg.train.epochs, 300)
         self.assertEqual(cfg.train.patience, 50)

@@ -98,7 +98,7 @@ def normalize_eval_metrics_cfg(cfg):
     obb_iou_backend = normalize_obb_iou_backend_name(
         root_cfg.get(
             'obb_iou_backend',
-            nested_cfg.get('obb_iou_backend', 'cpu_polygon'),
+            nested_cfg.get('obb_iou_backend', 'gpu_prob'),
         )
     )
 

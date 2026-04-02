@@ -5,13 +5,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from torch.amp import autocast
 
 from src.model.bbox_utils import non_max_suppression_obb, xywhr2xyxyxyxy
 from src.model.builder import build_model
 from src.model.output_adapter import flatten_predictions
 from src.tracking.obb_tracker import OBBTrackletManager
 from src.utils.config import load_config
+from src.utils.detection_cuda import resolve_detection_device
+from src.utils.torch_amp import autocast
 
 COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (0, 0, 255)]
 IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff'}
@@ -114,13 +115,13 @@ def main():
     parser.add_argument('--source_rgb_dir', type=str, required=True, help='Directory containing RGB frames.')
     parser.add_argument('--source_ir_dir', type=str, required=True, help='Directory containing IR frames with matching filenames.')
     parser.add_argument('--save_dir', type=str, default='outputs/track', help='Directory to write visualizations and per-frame txt outputs.')
-    parser.add_argument('--device', type=int, default=0, help='GPU id. Use -1 for CPU.')
+    parser.add_argument('--device', type=int, default=0, help='CUDA device id for tracking-by-detection inference.')
     parser.add_argument('--track_iou', type=float, default=0.2, help='IoU threshold used by the lightweight tracker.')
     parser.add_argument('--max_age', type=int, default=15, help='Maximum number of missed frames before a track is removed.')
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    device = torch.device('cpu' if args.device < 0 or not torch.cuda.is_available() else f'cuda:{args.device}')
+    device = resolve_detection_device(args.device)
 
     model = build_model(cfg.model).to(device)
     model.load_state_dict(torch.load(args.weights, map_location=device))

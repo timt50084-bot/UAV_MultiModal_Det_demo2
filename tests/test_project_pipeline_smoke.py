@@ -6,13 +6,28 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from omegaconf import OmegaConf
+try:
+    import torch
+except ImportError:  # pragma: no cover - optional in lightweight test envs
+    torch = None
 
-from tools import val as val_tool
-from src.utils.config import load_config
-from tools.run_experiment_suite import build_experiment_suite
-from tools.summarize_results import collect_project_summary
-from tools.val import parse_args as parse_val_args
+try:
+    from omegaconf import OmegaConf
+except ImportError:  # pragma: no cover - optional in lightweight test envs
+    OmegaConf = None
+
+if torch is not None and OmegaConf is not None:
+    from src.utils.config import load_config
+    from tools.run_experiment_suite import build_experiment_suite
+    from tools.summarize_results import collect_project_summary
+    from tools import val as val_tool
+    from tools.val import parse_args as parse_val_args
+else:  # pragma: no cover - exercised only when optional deps are absent
+    load_config = None
+    build_experiment_suite = None
+    collect_project_summary = None
+    val_tool = None
+    parse_val_args = None
 
 
 MAIN_CONFIGS = [
@@ -36,6 +51,7 @@ DOC_TEMPLATES = [
 ]
 
 
+@unittest.skipUnless(OmegaConf is not None and torch is not None, 'project smoke tests require OmegaConf and torch')
 class ProjectPipelineSmokeTestCase(unittest.TestCase):
     def test_core_configs_load(self):
         for config_path in MAIN_CONFIGS:
@@ -114,12 +130,13 @@ class ProjectPipelineSmokeTestCase(unittest.TestCase):
                     'exported_files': {},
                 }
 
-        args = SimpleNamespace(config='configs/main/tracking_eval.yaml', weights='dummy.pt', device=-1)
+        args = SimpleNamespace(config='configs/main/tracking_eval.yaml', weights='dummy.pt', device=0)
         loader = SimpleNamespace(dataset=SimpleNamespace(class_names=['car'], tracking_ground_truth={'seq0': {'frames': []}}))
         stdout = StringIO()
         with patch('tools.val.parse_args', return_value=(args, [])), \
                 patch('tools.val.load_config', return_value=cfg), \
                 patch('tools.val.apply_experiment_runtime_overrides', return_value=(cfg, 'tracking_eval')), \
+                patch('tools.val.resolve_detection_device', return_value=val_tool.torch.device('cuda:0')), \
                 patch('tools.val.build_dataloader', return_value=(loader, None)), \
                 patch('tools.val.build_model', return_value=DummyModel()), \
                 patch('tools.val.torch.load', return_value={}), \

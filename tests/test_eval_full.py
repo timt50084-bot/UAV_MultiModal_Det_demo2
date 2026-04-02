@@ -1,15 +1,30 @@
+import shutil
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-import torch
-from pathlib import Path
-import shutil
+try:
+    import torch
+except ImportError:  # pragma: no cover - optional in lightweight test envs
+    torch = None
 
-from src.engine.evaluator import Evaluator
-from src.metrics.obb_metrics import OBBMetricsEvaluator
+try:
+    from omegaconf import OmegaConf  # noqa: F401
+except ImportError:  # pragma: no cover - optional in lightweight test envs
+    OmegaConf = None
+
 from src.metrics.task_metrics import normalize_eval_metrics_cfg
-from src.utils.config import load_config
-from src.utils.postprocess_tuning import normalize_infer_cfg
+if torch is not None:
+    from src.engine.evaluator import Evaluator
+else:  # pragma: no cover - exercised only when torch is absent
+    Evaluator = None
+
+if OmegaConf is not None:
+    from src.utils.config import load_config
+    from src.utils.postprocess_tuning import normalize_infer_cfg
+else:  # pragma: no cover - exercised only when OmegaConf is absent
+    load_config = None
+    normalize_infer_cfg = None
 
 
 class DummyMetricsEvaluator:
@@ -34,83 +49,26 @@ class DummyMetricsEvaluator:
         }
 
 
-class RecordingModel(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.calls = []
+if torch is not None:
+    class RecordingModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
 
-    def forward(self, rgb, ir, prev_rgb=None, prev_ir=None):
-        self.calls.append({
-            'rgb': rgb.detach().cpu().clone(),
-            'ir': ir.detach().cpu().clone(),
-            'prev_rgb': prev_rgb.detach().cpu().clone(),
-            'prev_ir': prev_ir.detach().cpu().clone(),
-        })
-        return torch.zeros((rgb.shape[0], 1, 6), dtype=rgb.dtype, device=rgb.device)
+        def forward(self, rgb, ir, prev_rgb=None, prev_ir=None):
+            self.calls.append({
+                'rgb': rgb.detach().cpu().clone(),
+                'ir': ir.detach().cpu().clone(),
+                'prev_rgb': prev_rgb.detach().cpu().clone(),
+                'prev_ir': prev_ir.detach().cpu().clone(),
+            })
+            return torch.zeros((rgb.shape[0], 1, 6), dtype=rgb.dtype, device=rgb.device)
+else:  # pragma: no cover - exercised only when torch is absent
+    RecordingModel = None
 
 
+@unittest.skipUnless(torch is not None, 'torch is required for evaluator tests')
 class EvalFullTestCase(unittest.TestCase):
-    def test_result_dict_contains_full_metric_fields(self):
-        metrics_evaluator = OBBMetricsEvaluator(
-            num_classes=1,
-            extra_metrics_cfg={
-                'small_object': {'area_threshold': 32},
-                'temporal_stability': {'enabled': 'auto'},
-                'group_eval': {'enabled': True, 'keys': ['time_of_day', 'weather']},
-            },
-        )
-        metrics_evaluator.add_batch(
-            ['img1'],
-            [torch.tensor([[10.0, 10.0, 12.0, 12.0, 0.0, 0.95, 0.0]], dtype=torch.float32)],
-            [torch.tensor([[0.0, 10.0, 10.0, 12.0, 12.0, 0.0]], dtype=torch.float32)],
-            batch_metadata=[{'time_of_day': 'day'}],
-        )
-
-        metrics = metrics_evaluator.get_full_metrics()
-
-        for key in ['mAP_50', 'mAP_50_95', 'Precision', 'Recall', 'mAP_S', 'Recall_S', 'Precision_S', 'TemporalStability', 'GroupedMetrics']:
-            self.assertIn(key, metrics)
-        self.assertIn('time_of_day', metrics['GroupedMetrics'])
-        self.assertIn('day', metrics['GroupedMetrics']['time_of_day'])
-        self.assertIsNone(metrics['TemporalStability'])
-
-    def test_small_object_metrics_are_computed_correctly(self):
-        metrics_evaluator = OBBMetricsEvaluator(
-            num_classes=1,
-            extra_metrics_cfg={'small_object': {'area_threshold': 32}, 'temporal_stability': {'enabled': False}},
-        )
-        metrics_evaluator.add_batch(
-            ['img1'],
-            [torch.tensor([
-                [10.0, 10.0, 12.0, 12.0, 0.0, 0.95, 0.0],
-                [40.0, 40.0, 10.0, 10.0, 0.0, 0.70, 0.0],
-            ], dtype=torch.float32)],
-            [torch.tensor([[0.0, 10.0, 10.0, 12.0, 12.0, 0.0]], dtype=torch.float32)],
-        )
-
-        metrics = metrics_evaluator.get_full_metrics()
-
-        self.assertAlmostEqual(metrics['mAP_S'], 1.0, places=6)
-        self.assertAlmostEqual(metrics['Recall_S'], 1.0, places=6)
-        self.assertAlmostEqual(metrics['Precision_S'], 0.5, places=6)
-
-    def test_small_object_metrics_are_omitted_when_disabled(self):
-        metrics_evaluator = OBBMetricsEvaluator(
-            num_classes=1,
-            extra_metrics_cfg={'small_object': {'enabled': False, 'area_threshold': 32}, 'temporal_stability': {'enabled': False}},
-        )
-        metrics_evaluator.add_batch(
-            ['img1'],
-            [torch.tensor([[10.0, 10.0, 12.0, 12.0, 0.0, 0.95, 0.0]], dtype=torch.float32)],
-            [torch.tensor([[0.0, 10.0, 10.0, 12.0, 12.0, 0.0]], dtype=torch.float32)],
-        )
-
-        metrics = metrics_evaluator.get_full_metrics()
-
-        self.assertNotIn('mAP_S', metrics)
-        self.assertNotIn('Recall_S', metrics)
-        self.assertNotIn('Precision_S', metrics)
-
     def test_rgbdrop_and_irdrop_do_not_mutate_baseline_batch(self):
         imgs_rgb = torch.ones((1, 3, 4, 4), dtype=torch.float32)
         imgs_ir = torch.full((1, 3, 4, 4), 2.0, dtype=torch.float32)
@@ -147,22 +105,6 @@ class EvalFullTestCase(unittest.TestCase):
         self.assertIn('RGBDrop_mAP50', metrics)
         self.assertIn('IRDrop_mAP50', metrics)
 
-    def test_temporal_stability_safely_skips_without_sequence_metadata(self):
-        metrics_evaluator = OBBMetricsEvaluator(
-            num_classes=1,
-            extra_metrics_cfg={'temporal_stability': {'enabled': 'auto'}},
-        )
-        metrics_evaluator.add_batch(
-            ['img1'],
-            [torch.tensor([[10.0, 10.0, 12.0, 12.0, 0.0, 0.95, 0.0]], dtype=torch.float32)],
-            [torch.tensor([[0.0, 10.0, 10.0, 12.0, 12.0, 0.0]], dtype=torch.float32)],
-            batch_metadata=[None],
-        )
-
-        metrics = metrics_evaluator.get_full_metrics()
-        self.assertIn('TemporalStability', metrics)
-        self.assertIsNone(metrics['TemporalStability'])
-
     def test_legacy_eval_config_still_works(self):
         imgs_rgb = torch.ones((1, 3, 4, 4), dtype=torch.float32)
         imgs_ir = torch.ones((1, 3, 4, 4), dtype=torch.float32)
@@ -189,12 +131,16 @@ class EvalFullTestCase(unittest.TestCase):
         self.assertIn('mAP_50_95', metrics)
 
     def test_full_project_default_keeps_cross_modal_robustness_disabled(self):
+        if load_config is None:
+            self.skipTest('config stack requires OmegaConf')
         cfg = load_config('configs/main/full_project.yaml')
         eval_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}))
 
         self.assertFalse(eval_cfg['cross_modal_robustness']['enabled'])
 
     def test_formal_robustness_config_enables_only_cross_modal_eval(self):
+        if load_config is None or normalize_infer_cfg is None:
+            self.skipTest('config stack requires OmegaConf')
         cfg = load_config('configs/main/full_project_robustness.yaml')
         eval_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}))
         infer_cfg = normalize_infer_cfg(cfg.get('infer', {}), default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)
@@ -207,12 +153,16 @@ class EvalFullTestCase(unittest.TestCase):
         self.assertEqual(infer_cfg['classwise_conf_thresholds'], {})
 
     def test_full_project_default_keeps_detection_error_analysis_disabled(self):
+        if load_config is None:
+            self.skipTest('config stack requires OmegaConf')
         cfg = load_config('configs/main/full_project.yaml')
         eval_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}))
 
         self.assertFalse(eval_cfg['error_analysis']['enabled'])
 
     def test_formal_error_analysis_config_enables_only_detection_error_analysis(self):
+        if load_config is None or normalize_infer_cfg is None:
+            self.skipTest('config stack requires OmegaConf')
         cfg = load_config('configs/main/full_project_error_analysis.yaml')
         eval_cfg = normalize_eval_metrics_cfg(cfg.get('eval', {}))
         infer_cfg = normalize_infer_cfg(cfg.get('infer', {}), default_imgsz=cfg.dataset.imgsz, nms_cfg=cfg.val.nms)

@@ -200,14 +200,9 @@ python tools/prepare_dronevehicle_dataset.py \
 
 如果 `1024` 对当前设备压力过大，不建议偷偷改小主线默认值；优先在命令行临时覆盖 `dataset.imgsz=960` 或 `dataset.imgsz=800`。
 `train.eval_interval` 控制训练期间的自动验证频率，最后一轮会强制验证一次。early stopping 的 `patience` 仍按训练 epoch 计数，只是在发生验证的 epoch 上检查是否触发。
-detection 验证主线默认现在是 `eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。这条路径使用 GPU evaluator 和 ProbIoU surrogate，相比 CPU shapely reference 更快，但它不是 exact polygon IoU。
-CPU 不再是 detection 并列主线，只保留三类角色：显式 reference（`cpu + cpu_polygon`）、无 CUDA 时的自动 fallback，以及仍保留的 CPU analysis 路径（例如 `polygon_iou` / `ErrorAnalysis`）。
-如果你需要强制使用 CPU reference，请显式覆盖：
-
-- `eval.evaluator=cpu`
-- `eval.obb_iou_backend=cpu_polygon`
-
-如果当前环境没有 CUDA，默认验证会打印 warning 并自动回退到 CPU reference 路径，而不是直接失败。
+detection 验证主线现在统一为 `eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。这条路径使用 GPU evaluator 和 ProbIoU surrogate；`gpu_prob` 仍然不是 exact polygon IoU。
+CPU detection reference、CPU evaluator 和非 CUDA 自动 fallback 已从 detection 主线移除。
+如果当前环境没有 CUDA，detection 训练 / 验证 / 推理入口会直接报错：`This detection path requires CUDA. CPU detection reference has been removed.`
 
 如果你还需要进一步调数据加载性能，也优先看：
 
@@ -273,29 +268,11 @@ python tools/val.py \
 
 说明：
 
-- 在 CUDA 环境下，这条命令默认走 detection GPU evaluator：`eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。
-- `gpu_prob` 是 ProbIoU surrogate，相比 CPU shapely reference 更快，但不是 exact polygon IoU。
-- 如果当前环境没有 CUDA，运行时会打印 warning 并自动回退到 `cpu + cpu_polygon`。
-- 如果你要强制使用 CPU reference，可在命令行追加：`eval.evaluator=cpu eval.obb_iou_backend=cpu_polygon`
-- 这条默认切换只针对 detection 验证；tracking evaluator 仍是独立路径，没有一起切到同样的 GPU 主线。
+- 这条命令固定走 detection GPU evaluator：`eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。
+- `gpu_prob` 是 ProbIoU surrogate，不是 exact polygon IoU。
+- 如果当前环境没有 CUDA，命令会直接失败，并明确提示 detection 主线需要 CUDA。
+- tracking evaluator 仍是独立路径，没有和 detection evaluator 合并成同一套评估实现。
 
-### 3.1 detection evaluator CPU/GPU 对比
-
-如果你要做 CPU vs GPU detection evaluator 的 parity / regression 检查，可使用：
-
-```bash
-python tools/compare_detection_evaluators.py \
-  --config configs/main/full_project.yaml \
-  --weights outputs/experiments/full_project/weights/best.pt \
-  --device 0
-```
-
-这个工具固定比较：
-
-- `cpu + cpu_polygon`
-- `gpu + gpu_prob`
-
-用途是做 detection evaluator 的 drift / runtime 对比与回归守门，不包含 tracking evaluator；输出会同时落盘结构化 JSON 和人类可读 Markdown 报告。
 
 ### 4. 推理
 
@@ -403,7 +380,7 @@ outputs/
 
 - 当前检测主线推荐入口是 `configs/main/full_project.yaml`，对应 RGB+IR 双流、`ReliabilityAwareFusion`、`two_frame` temporal 和 OBB detection。
 - `full_project` 当前默认训练参数是 `batch_size=4`、`imgsz=1024`、`epochs=300`、`patience=50`、`eval_interval=5`、`lr=0.0003`、`use_amp=False`；dataset 主线路径保持 `dataset/DroneVehicle_process`。
-- detection 验证默认已经切到 GPU evaluator：`eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。`gpu_prob` 是 surrogate / ProbIoU 路线，不是 exact polygon IoU；CPU 现在是 reference / fallback / analysis 路径，不再是并列主线。
+- detection 验证现在是单一路径：`eval.evaluator=gpu` + `eval.obb_iou_backend=gpu_prob`。`gpu_prob` 是 surrogate / ProbIoU 路线，不是 exact polygon IoU；非 CUDA 环境会显式报错，而不是切回旧 CPU detection。
 - `configs/main/` 下的其他检测配置主要用于模块消融和专项实验。
 - 当前 tracking 主入口只突出 `configs/main/tracking_base.yaml` 和 `configs/main/tracking_final.yaml`；`configs/main/tracking_eval.yaml` 是配套的离线评估配置。
 - detection 侧 temporal memory 仅保留为历史实验 / 兼容路径，不再代表检测主线；tracking 侧 memory 仍然是 `tracking_final` 的有效能力。
@@ -415,7 +392,6 @@ outputs/
 ## 补充文档
 
 - 配置说明：[`configs/CONFIG_GUIDE.md`](configs/CONFIG_GUIDE.md)
-- GPU evaluator 迁移阶段记录：[`docs/GPU_EVAL_STAGE3_GPU_EVALUATOR.md`](docs/GPU_EVAL_STAGE3_GPU_EVALUATOR.md)、[`docs/GPU_EVAL_STAGE4_PARITY.md`](docs/GPU_EVAL_STAGE4_PARITY.md)、[`docs/GPU_EVAL_STAGE5_DEFAULT_SWITCH.md`](docs/GPU_EVAL_STAGE5_DEFAULT_SWITCH.md)、[`docs/GPU_EVAL_STAGE6_CLEANUP.md`](docs/GPU_EVAL_STAGE6_CLEANUP.md)
 - 实验计划模板：[`docs/EXPERIMENT_PLAN.md`](docs/EXPERIMENT_PLAN.md)
 - 技术方案模板：[`docs/TECHNICAL_PLAN_TEMPLATE.md`](docs/TECHNICAL_PLAN_TEMPLATE.md)
 - PPT 大纲：[`docs/PPT_OUTLINE.md`](docs/PPT_OUTLINE.md)

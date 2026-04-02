@@ -2,11 +2,11 @@ import re
 import time
 
 import torch
-from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from src.model.bbox_utils import make_anchors, normalize_anchor_points
 from src.model.output_adapter import flatten_predictions
+from src.utils.torch_amp import autocast, make_grad_scaler
 
 
 class TrainTimingProfile:
@@ -92,7 +92,7 @@ class Trainer:
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
-        self.scaler = GradScaler(self.device.type, enabled=self.use_amp)
+        self.scaler = make_grad_scaler(self.device.type, enabled=self.use_amp)
         self._anchor_cache = {}
         self._debug_zero_pos_count = 0
 
