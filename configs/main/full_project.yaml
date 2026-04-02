@@ -12,7 +12,7 @@ dataloader:
   pin_memory: True
 
 dataset:
-  root_dir: 'root/dataset/DroneVehicle_Process'
+  root_dir: '/root/dataset/DroneVehicle_Processed'
   # Mainline stays at 1024. If memory or throughput becomes a real constraint,
   # override at runtime with `dataset.imgsz=960` or `dataset.imgsz=800`.
   imgsz: 1024

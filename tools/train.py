@@ -129,7 +129,12 @@ def main():
         eval_cfg=extra_metrics_cfg,
         infer_cfg=infer_cfg,
     )
-
+    print(
+        f"[Eval Route] requested={evaluator.requested_backend}/{evaluator.requested_obb_iou_backend} "
+        f"resolved={evaluator.resolved_backend}/{evaluator.resolved_obb_iou_backend} "
+        f"role={evaluator.evaluator_role} reason={evaluator.resolution_reason} "
+        f"evaluator={type(evaluator).__name__} metrics={type(evaluator.metrics_evaluator).__name__}"
+    )
     callbacks = [
         EMACallback(model),
         CheckpointCallback(save_dir=cfg.train.save_dir, patience=cfg.train.patience),
