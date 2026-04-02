@@ -1,8 +1,6 @@
 # Core runtime dependencies
 # These ranges are intentionally conservative so a fresh install on another
 # machine is less likely to drift onto an untested major version.
-torch>=2.2,<2.4
-torchvision>=0.17,<0.19
 numpy>=1.23,<2.0
 opencv-python>=4.8,<5.0
 omegaconf>=2.3,<3.0

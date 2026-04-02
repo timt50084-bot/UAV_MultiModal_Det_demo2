@@ -1,7 +1,6 @@
 import re
 import time
 
-import numpy as np
 import torch
 from torch.amp import autocast
 from torch.cuda.amp import GradScaler
@@ -241,26 +240,28 @@ class Trainer:
         return f"{loss_value:.4f}"
 
     def format_targets(self, targets, batch_size):
-        targets_np = targets.numpy() if targets.device.type == 'cpu' else targets.cpu().numpy()
-        gt_dict = {b: [] for b in range(batch_size)}
-        for target in targets_np:
-            gt_dict[int(target[0])].append(target[1:])
+        if targets.numel() == 0:
+            gt_labels = torch.zeros((batch_size, 0, 1), device=self.device)
+            gt_bboxes = torch.zeros((batch_size, 0, 5), device=self.device)
+            mask_gt = torch.zeros((batch_size, 0, 1), device=self.device)
+            return gt_labels, gt_bboxes, mask_gt
 
-        max_gts = max([len(v) for v in gt_dict.values()] + [0])
+        targets = targets.to(self.device, non_blocking=True)
+        batch_indices = targets[:, 0].long()
+        gt_counts = torch.bincount(batch_indices, minlength=batch_size)
+        max_gts = int(gt_counts.max().item())
 
         gt_labels = torch.zeros((batch_size, max_gts, 1), device=self.device)
         gt_bboxes = torch.zeros((batch_size, max_gts, 5), device=self.device)
         mask_gt = torch.zeros((batch_size, max_gts, 1), device=self.device)
 
-        if max_gts > 0:
-            for batch_idx in range(batch_size):
-                num_gts = len(gt_dict[batch_idx])
-                if num_gts > 0:
-                    gt_array = np.asarray(gt_dict[batch_idx], dtype=np.float32)
-                    gt_tensor = torch.from_numpy(gt_array).to(self.device)
-                    gt_labels[batch_idx, :num_gts, 0] = gt_tensor[:, 0]
-                    gt_bboxes[batch_idx, :num_gts, :] = gt_tensor[:, 1:6]
-                    mask_gt[batch_idx, :num_gts, 0] = 1.0
+        write_positions = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        for target, batch_idx in zip(targets, batch_indices):
+            position = write_positions[batch_idx]
+            gt_labels[batch_idx, position, 0] = target[1]
+            gt_bboxes[batch_idx, position, :] = target[2:7]
+            mask_gt[batch_idx, position, 0] = 1.0
+            write_positions[batch_idx] += 1
 
         return gt_labels, gt_bboxes, mask_gt
 

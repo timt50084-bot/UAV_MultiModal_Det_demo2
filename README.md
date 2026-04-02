@@ -77,7 +77,7 @@ python -m unittest tests.test_experiment_configs
 
 ```yaml
 dataset:
-  root_dir: D:/DataSet/DroneVehicle_Processed
+  root_dir: dataset/DroneVehicle_process
 ```
 
 如果你使用自己的处理后数据目录，优先改这里。
@@ -114,8 +114,8 @@ dataset:
 
 ```bash
 python tools/prepare_dronevehicle_dataset.py \
-  --raw-root D:/DataSet/DroneVehicle \
-  --output-root D:/DataSet/DroneVehicle_Processed \
+  --raw-root dataset/DroneVehicle \
+  --output-root dataset/DroneVehicle_process \
   --splits train val
 ```
 

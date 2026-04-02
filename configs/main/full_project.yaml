@@ -12,7 +12,7 @@ dataloader:
   pin_memory: True
 
 dataset:
-  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+  root_dir: 'dataset/DroneVehicle_process'
   imgsz: 640
 
 train:

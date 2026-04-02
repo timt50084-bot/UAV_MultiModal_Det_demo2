@@ -3,8 +3,8 @@
 
 dataset:
   type: 'DroneDualDataset'
-  raw_root: 'D:/DataSet/DroneVehicle'
-  root_dir: 'D:/DataSet/DroneVehicle_Processed'
+  raw_root: 'dataset/DroneVehicle'
+  root_dir: 'dataset/DroneVehicle_process'
   split: 'train'
   imgsz: 1024
   class_names: ['car', 'truck', 'bus', 'van', 'freight_car']

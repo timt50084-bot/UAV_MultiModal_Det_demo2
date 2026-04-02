@@ -73,13 +73,13 @@ def _build_parser() -> argparse.ArgumentParser:
         '--raw-root',
         required=False,
         type=str,
-        default='D:/DataSet/DroneVehicle',
+        default='dataset/DroneVehicle',
         help='Root directory of the raw DroneVehicle dataset.',
     )
     parser.add_argument(
         '--output-root',
         type=str,
-        default='D:/DataSet/DroneVehicle_Processed',
+        default='dataset/DroneVehicle_process',
         help='Output root for the processed dataset.',
     )
     parser.add_argument(

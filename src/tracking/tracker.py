@@ -36,6 +36,7 @@ class MultiObjectTracker:
         self.frame_index = 0
         self.sequence_id = None
         self.last_frame_summary = {}
+        self._reactivation_details = {}
 
     def update(self, detections, frame_meta=None, appearance_features=None, reliability_features=None, feature_assist_features=None, refinement_payload=None):
         detections = ensure_detection_tensor(detections)
@@ -253,7 +254,7 @@ class MultiObjectTracker:
         return matches, remaining_tracks, remaining_dets, summary
 
     def _register_reactivation_detail(self, track_idx, det_idx, source, detail):
-        self.cfg.setdefault('_reactivation_details', {})[(track_idx, det_idx)] = {
+        self._reactivation_details[(track_idx, det_idx)] = {
             'reactivation_source': source,
             **detail,
         }
@@ -317,7 +318,7 @@ class MultiObjectTracker:
         refinement_context = dict(refinement_context or {})
         rescued_detection = bool(refinement_context.get('rescued_detection', False))
         predicted_candidate = bool(refinement_context.get('predicted_candidate', False))
-        reactivation_detail = self.cfg.get('_reactivation_details', {}).pop((track_idx, det_idx), None)
+        reactivation_detail = self._reactivation_details.pop((track_idx, det_idx), None)
         reactivation_source = None
         if was_lost:
             reactivation_source = 'normal_match'

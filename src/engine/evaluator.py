@@ -2,7 +2,6 @@ import time
 from copy import deepcopy
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from torch.amp import autocast
@@ -89,6 +88,28 @@ class Evaluator:
             image_ids.append(image_id)
             batch_metadata.append(metadata or None)
         return image_ids, batch_metadata
+
+    @staticmethod
+    def _targets_to_batch_gts(targets, batch_size):
+        if targets.numel() == 0:
+            return [torch.zeros((0, 6), dtype=torch.float32) for _ in range(batch_size)]
+
+        gt_counts = torch.bincount(targets[:, 0].long(), minlength=batch_size)
+        max_gts = int(gt_counts.max().item())
+        padded = torch.zeros((batch_size, max_gts, 6), dtype=torch.float32, device=targets.device)
+        write_positions = torch.zeros(batch_size, dtype=torch.long, device=targets.device)
+
+        for target in targets:
+            batch_idx = int(target[0].item())
+            position = write_positions[batch_idx]
+            padded[batch_idx, position, :] = target[1:7]
+            write_positions[batch_idx] += 1
+
+        batch_gts = []
+        for batch_idx in range(batch_size):
+            count = int(gt_counts[batch_idx].item())
+            batch_gts.append(padded[batch_idx, :count].cpu())
+        return batch_gts
 
     def _snapshot_eval_artifacts(self):
         return {
@@ -197,18 +218,7 @@ class Evaluator:
             t2 = time.time()
             t3 = t2
 
-            targets_np = targets.numpy() if targets.device.type == 'cpu' else targets.cpu().numpy()
-            gt_dict = {b: [] for b in range(eval_rgb.shape[0])}
-            for target in targets_np:
-                gt_dict[int(target[0])].append(target[1:])
-            batch_gts = []
-            for sample_idx in range(eval_rgb.shape[0]):
-                gt_items = gt_dict[sample_idx]
-                if gt_items:
-                    gt_array = np.asarray(gt_items, dtype=np.float32)
-                    batch_gts.append(torch.from_numpy(gt_array))
-                else:
-                    batch_gts.append(torch.zeros((0, 6), dtype=torch.float32))
+            batch_gts = self._targets_to_batch_gts(targets, eval_rgb.shape[0])
 
             image_ids, batch_metadata = self._build_image_ids_and_metadata(epoch, batch_idx, eval_rgb.shape[0], sample_offset)
             preds = [pred.cpu() for pred in preds]

@@ -1,4 +1,5 @@
 from copy import deepcopy
+import inspect
 import warnings
 
 import torch
@@ -72,6 +73,7 @@ class YOLODualModalOBB(nn.Module):
         if fusion is not None and fusion.get('type'):
             fusion_cfg = deepcopy(dict(fusion))
             fusion_cfg.setdefault('channel_list', self.channels)
+            fusion_cfg = self._filter_unsupported_fusion_args(fusion_cfg)
             return FUSIONS.build(fusion_cfg)
 
         # Keep the old fusion_att_type route as a thin compatibility layer only.
@@ -86,6 +88,41 @@ class YOLODualModalOBB(nn.Module):
             )
 
         return FUSIONS.build({'type': fusion_type, 'channel_list': self.channels})
+
+    def _filter_unsupported_fusion_args(self, fusion_cfg):
+        fusion_type = fusion_cfg.get('type')
+        fusion_cls = FUSIONS._module_dict.get(fusion_type)
+        if fusion_cls is None:
+            return fusion_cfg
+
+        signature = inspect.signature(fusion_cls.__init__)
+        if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+            return fusion_cfg
+
+        allowed_keys = {
+            name
+            for name, parameter in signature.parameters.items()
+            if name != 'self' and parameter.kind in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
+        filtered_cfg = {'type': fusion_type}
+        dropped_keys = []
+        for key, value in fusion_cfg.items():
+            if key == 'type':
+                continue
+            if key in allowed_keys:
+                filtered_cfg[key] = value
+            else:
+                dropped_keys.append(key)
+
+        if dropped_keys:
+            warnings.warn(
+                f"Dropping unsupported fusion args for {fusion_type}: {', '.join(sorted(dropped_keys))}.",
+                stacklevel=3,
+            )
+        return filtered_cfg
 
     def _build_temporal_memory_fusion(self):
         # Detection-side temporal memory is no longer the maintained mainline.
@@ -126,9 +163,9 @@ class YOLODualModalOBB(nn.Module):
 
     def _build_tracking_feature_payload(self, enhanced_feats, feat_rgb, feat_ir, input_hw):
         return {
-            'fused_feats': tuple(feat.detach().clone() for feat in enhanced_feats),
-            'rgb_feats': tuple(feat.detach().clone() for feat in feat_rgb),
-            'ir_feats': tuple(feat.detach().clone() for feat in feat_ir),
+            'fused_feats': tuple(feat.detach() for feat in enhanced_feats),
+            'rgb_feats': tuple(feat.detach() for feat in feat_rgb),
+            'ir_feats': tuple(feat.detach() for feat in feat_ir),
             'input_hw': tuple(int(value) for value in input_hw),
         }
 
