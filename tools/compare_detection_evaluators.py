@@ -58,7 +58,7 @@ def build_evaluator_specs():
             'description': 'CPU evaluator + exact shapely polygon IoU reference path.',
         },
         {
-            'name': 'gpu_candidate',
+            'name': 'gpu_mainline',
             'evaluator': 'gpu',
             'obb_iou_backend': 'gpu_prob',
             'description': 'GPU evaluator + ProbIoU surrogate similarity detection mainline path.',
@@ -197,6 +197,12 @@ def build_compare_result(metadata, cpu_result, gpu_result, strict=False, toleran
         else 'CPU/GPU evaluator parity comparison failed the strict gate.'
     )
 
+    gpu_mainline_payload = {
+        'spec': dict((gpu_result or {}).get('spec', {})),
+        'metrics': gpu_metrics,
+        'runtime_s': _safe_float((gpu_result or {}).get('runtime_s')),
+    }
+
     return {
         'metadata': dict(metadata or {}),
         'cpu_reference': {
@@ -204,11 +210,10 @@ def build_compare_result(metadata, cpu_result, gpu_result, strict=False, toleran
             'metrics': cpu_metrics,
             'runtime_s': _safe_float((cpu_result or {}).get('runtime_s')),
         },
-        'gpu_candidate': {
-            'spec': dict((gpu_result or {}).get('spec', {})),
-            'metrics': gpu_metrics,
-            'runtime_s': _safe_float((gpu_result or {}).get('runtime_s')),
-        },
+        'gpu_mainline': gpu_mainline_payload,
+        # Backward-compatible alias for older parity artifacts or ad hoc readers
+        # that still expect the Stage 4 migration-era key.
+        'gpu_candidate': dict(gpu_mainline_payload),
         'drift': gate['per_metric'],
         'runtime': runtime,
         'gate': {
@@ -240,7 +245,7 @@ def render_compare_markdown(result):
     runtime = result.get('runtime', {})
     gate = result.get('gate', {})
     cpu_metrics = result.get('cpu_reference', {}).get('metrics', {})
-    gpu_metrics = result.get('gpu_candidate', {}).get('metrics', {})
+    gpu_metrics = result.get('gpu_mainline', result.get('gpu_candidate', {})).get('metrics', {})
     drifts = result.get('drift', {})
 
     lines = [
@@ -460,7 +465,7 @@ def compare_detection_evaluators(config_path, weights_path, device_index=0, outp
     result = build_compare_result(
         metadata=metadata,
         cpu_result=compare_results['cpu_reference'],
-        gpu_result=compare_results['gpu_candidate'],
+        gpu_result=compare_results['gpu_mainline'],
         strict=bool(strict_gate),
         tolerances=DEFAULT_DRIFT_TOLERANCES,
     )

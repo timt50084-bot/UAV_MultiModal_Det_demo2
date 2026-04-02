@@ -24,7 +24,7 @@ class CompareDetectionEvaluatorsTestCase(unittest.TestCase):
         self.assertEqual(specs[0]['name'], 'cpu_reference')
         self.assertEqual(specs[0]['evaluator'], 'cpu')
         self.assertEqual(specs[0]['obb_iou_backend'], 'cpu_polygon')
-        self.assertEqual(specs[1]['name'], 'gpu_candidate')
+        self.assertEqual(specs[1]['name'], 'gpu_mainline')
         self.assertEqual(specs[1]['evaluator'], 'gpu')
         self.assertEqual(specs[1]['obb_iou_backend'], 'gpu_prob')
 
@@ -127,6 +127,7 @@ class CompareDetectionEvaluatorsTestCase(unittest.TestCase):
 
         self.assertIn('metadata', result)
         self.assertIn('cpu_reference', result)
+        self.assertIn('gpu_mainline', result)
         self.assertIn('gpu_candidate', result)
         self.assertIn('drift', result)
         self.assertIn('runtime', result)
@@ -134,6 +135,7 @@ class CompareDetectionEvaluatorsTestCase(unittest.TestCase):
         self.assertIn('summary', result)
         self.assertAlmostEqual(result['drift']['mAP_50']['abs_diff'], 0.02, places=6)
         self.assertAlmostEqual(result['runtime']['speedup_vs_cpu'], 2.5, places=6)
+        self.assertEqual(result['gpu_mainline']['metrics'], result['gpu_candidate']['metrics'])
 
     def test_write_compare_outputs_emits_json_and_markdown(self):
         specs = build_evaluator_specs()
