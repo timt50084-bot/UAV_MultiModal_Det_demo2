@@ -27,6 +27,9 @@ class TemporalMemoryTestCase(unittest.TestCase):
             torch.randn(2, 256, 8, 8),
         )
 
+    def _make_features_with_grad(self):
+        return tuple(feat.requires_grad_() for feat in self._make_features())
+
     def test_memory_module_forward_shape(self):
         module = TemporalMemoryFusion(channels=[32, 64, 128, 256], memory_len=3, aggregator='weighted_avg')
         current_feats = self._make_features()
@@ -78,9 +81,9 @@ class TemporalMemoryTestCase(unittest.TestCase):
                 "memory_len": 2,
             },
         })
-        feats_a = self._make_features()
-        feats_b = self._make_features()
-        feats_c = self._make_features()
+        feats_a = self._make_features_with_grad()
+        feats_b = self._make_features_with_grad()
+        feats_c = self._make_features_with_grad()
 
         model.reset_temporal_memory()
         model.update_temporal_memory(feats_a)
@@ -90,6 +93,30 @@ class TemporalMemoryTestCase(unittest.TestCase):
         memory_bank = model.get_temporal_memory()
         self.assertEqual(len(memory_bank), 2)
         self.assertEqual(len(memory_bank[0]), 4)
+        for step in memory_bank:
+            for feat in step:
+                self.assertFalse(feat.requires_grad)
+                self.assertIsNone(feat.grad_fn)
+
+    def test_temporal_state_reset_clears_step_cache_and_memory(self):
+        model = build_model({
+            "type": "YOLODualModalOBB",
+            "num_classes": 1,
+            "channels": [32, 64, 128, 256],
+            "fusion": {"type": "SimpleConcatFusion"},
+            "temporal": {
+                "enabled": True,
+                "mode": "memory",
+                "memory_len": 2,
+            },
+        })
+        model.update_temporal_memory(self._make_features_with_grad())
+        model.last_temporal_state = {"reference_valid": True}
+
+        model.reset_temporal_state(clear_memory=True)
+
+        self.assertIsNone(model.last_temporal_state)
+        self.assertEqual(len(model.get_temporal_memory()), 0)
 
     def test_two_frame_path_still_works(self):
         model = build_model({
@@ -125,6 +152,32 @@ class TemporalMemoryTestCase(unittest.TestCase):
         self.assertFalse(model.last_temporal_state["reference_valid"])
         self.assertIsNone(model.last_temporal_state["reference_feats"])
         self.assertIsNone(model.get_temporal_consistency_loss())
+
+    def test_two_frame_state_keeps_only_needed_grad_path(self):
+        model = build_model({
+            "type": "YOLODualModalOBB",
+            "num_classes": 1,
+            "channels": [32, 64, 128, 256],
+            "fusion": {"type": "SimpleConcatFusion"},
+            "temporal": {
+                "enabled": True,
+                "mode": "two_frame",
+            },
+        })
+        rgb = torch.randn(1, 3, 64, 64, requires_grad=True)
+        ir = torch.randn(1, 3, 64, 64, requires_grad=True)
+        prev_rgb = torch.randn(1, 3, 64, 64, requires_grad=True)
+        prev_ir = torch.randn(1, 3, 64, 64, requires_grad=True)
+
+        model(rgb, ir, prev_rgb=prev_rgb, prev_ir=prev_ir)
+        state = model.last_temporal_state
+
+        self.assertTrue(state["reference_valid"])
+        self.assertTrue(any(feat.requires_grad for feat in state["current_feats_after_temporal"]))
+        self.assertTrue(all(not feat.requires_grad for feat in state["reference_feats"]))
+        self.assertTrue(all(feat.grad_fn is None for feat in state["reference_feats"]))
+        self.assertTrue(all(not value.requires_grad for value in state["temporal_maps"].values()))
+        self.assertTrue(all(value.grad_fn is None for value in state["temporal_maps"].values()))
 
     def test_legacy_fusion_att_type_still_builds(self):
         # Keep one explicit compatibility test for the deprecated fusion entry.

@@ -164,6 +164,18 @@ class YOLODualModalOBB(nn.Module):
     def _clone_feature_tuple(self, feats):
         return tuple(feat.detach().clone() for feat in feats)
 
+    @staticmethod
+    def _detach_feature_tuple(feats):
+        if feats is None:
+            return None
+        return tuple(feat.detach() for feat in feats)
+
+    @staticmethod
+    def _detach_temporal_maps(temporal_maps):
+        if not temporal_maps:
+            return {}
+        return {name: value.detach() for name, value in temporal_maps.items()}
+
     def _build_tracking_feature_payload(self, enhanced_feats, feat_rgb, feat_ir, input_hw):
         return {
             'fused_feats': tuple(feat.detach() for feat in enhanced_feats),
@@ -173,7 +185,24 @@ class YOLODualModalOBB(nn.Module):
         }
 
     def reset_temporal_memory(self):
-        self.temporal_memory = []
+        self.reset_temporal_state(clear_memory=True)
+
+    def clear_temporal_step_state(self):
+        self.last_temporal_state = None
+
+    def reset_temporal_state(self, clear_memory=True):
+        self.clear_temporal_step_state()
+        if clear_memory:
+            self.temporal_memory = []
+
+    def get_temporal_debug_state(self):
+        return {
+            'enabled': bool(self.temporal_enabled),
+            'mode': self.temporal_mode,
+            'memory_size': len(self.temporal_memory),
+            'memory_len': int(self.temporal_memory_len),
+            'has_step_state': self.last_temporal_state is not None,
+        }
 
     def get_temporal_memory(self):
         return tuple(self.temporal_memory)
@@ -228,10 +257,10 @@ class YOLODualModalOBB(nn.Module):
                     target_size=target_hw if return_attention_map else None,
                 )
             self.last_temporal_state = {
-                'current_feats_before_temporal': current_feats_before_temporal,
+                'current_feats_before_temporal': self._detach_feature_tuple(current_feats_before_temporal),
                 'current_feats_after_temporal': enhanced_feats,
-                'reference_feats': prev_enhanced_feats,
-                'temporal_maps': temporal_maps,
+                'reference_feats': self._detach_feature_tuple(prev_enhanced_feats),
+                'temporal_maps': self._detach_temporal_maps(temporal_maps),
                 'reference_valid': reference_valid,
             }
         elif self.temporal_mode == 'memory':
@@ -251,10 +280,10 @@ class YOLODualModalOBB(nn.Module):
             reference_valid = bool(resolved_memory_steps)
             reference_feats = resolved_memory_steps[-1] if resolved_memory_steps else None
             self.last_temporal_state = {
-                'current_feats_before_temporal': current_feats_before_temporal,
+                'current_feats_before_temporal': self._detach_feature_tuple(current_feats_before_temporal),
                 'current_feats_after_temporal': enhanced_feats,
-                'reference_feats': reference_feats,
-                'temporal_maps': temporal_maps,
+                'reference_feats': self._detach_feature_tuple(reference_feats),
+                'temporal_maps': self._detach_temporal_maps(temporal_maps),
                 'reference_valid': reference_valid,
             }
             self.update_temporal_memory(current_feats_before_temporal)

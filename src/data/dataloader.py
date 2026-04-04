@@ -1,7 +1,10 @@
 from copy import deepcopy
 from importlib import import_module
 from pathlib import Path
+import random
+import time
 
+import cv2
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -91,7 +94,33 @@ def create_small_object_sampler(label_dir, dataset_len, small_threshold=0.05):
     return WeightedRandomSampler(weights, num_samples=dataset_len, replacement=True)
 
 
-def collate_fn(batch):
+def _normalize_temporal_debug_cfg(performance_cfg):
+    debug_cfg = performance_cfg.get('temporal_debug', {}) if isinstance(performance_cfg, dict) else {}
+    if not isinstance(debug_cfg, dict):
+        debug_cfg = {}
+    normalized = dict(debug_cfg)
+    normalized['enabled'] = bool(normalized.get('enabled', False))
+    normalized['sample_log_interval'] = max(0, int(normalized.get('sample_log_interval', 0)))
+    normalized['slow_sample_ms'] = float(normalized.get('slow_sample_ms', 500.0))
+    normalized['slow_collate_ms'] = float(normalized.get('slow_collate_ms', 200.0))
+    normalized['log_epoch_reset'] = bool(normalized.get('log_epoch_reset', True))
+    return normalized
+
+
+def _dataloader_worker_init_fn(worker_id):
+    try:
+        cv2.setNumThreads(0)
+        if hasattr(cv2, 'ocl'):
+            cv2.ocl.setUseOpenCL(False)
+    except Exception:
+        pass
+
+    base_seed = torch.initial_seed() % (2 ** 32)
+    random.seed(base_seed)
+    np.random.seed(base_seed)
+
+
+def _collate_batch(batch):
     img_rgb, img_ir, labels, prev_rgb, prev_ir = zip(*batch)
 
     img_rgb = torch.stack(img_rgb, 0)
@@ -113,6 +142,33 @@ def collate_fn(batch):
     return img_rgb, img_ir, targets, prev_rgb, prev_ir
 
 
+def build_collate_fn(debug_cfg=None):
+    debug_cfg = debug_cfg or {}
+    if not debug_cfg.get('enabled', False):
+        return _collate_batch
+
+    slow_collate_ms = float(debug_cfg.get('slow_collate_ms', 200.0))
+    batch_counter = {'value': 0}
+
+    def _debug_collate(batch):
+        start_time = time.perf_counter()
+        collated = _collate_batch(batch)
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        batch_counter['value'] += 1
+        if elapsed_ms >= slow_collate_ms:
+            print(
+                f"[TemporalData][Collate] batch={batch_counter['value']} "
+                f"size={len(batch)} elapsed_ms={elapsed_ms:.1f}"
+            )
+        return collated
+
+    return _debug_collate
+
+
+def collate_fn(batch):
+    return _collate_batch(batch)
+
+
 def build_dataloader(cfg, is_training=True):
     _ensure_data_modules_registered()
 
@@ -120,6 +176,7 @@ def build_dataloader(cfg, is_training=True):
     dataloader_cfg = _clone_dataloader_cfg(cfg)
     performance_cfg = _clone_performance_cfg(cfg)
     dataloader_perf_cfg = performance_cfg.get('dataloader', {}) if isinstance(performance_cfg, dict) else {}
+    temporal_debug_cfg = _normalize_temporal_debug_cfg(performance_cfg)
     if 'root_dir' in dataset_cfg:
         dataset_cfg['root_dir'] = _resolve_dataset_root_dir(dataset_cfg.get('root_dir'))
     dataset_cfg['split'] = 'train' if is_training else 'val'
@@ -132,7 +189,9 @@ def build_dataloader(cfg, is_training=True):
     dataset_cfg['temporal_stride'] = int(
         temporal_cfg.get('stride', model_cfg.get('temporal_stride', 1))
     )
+    dataset_cfg['temporal_debug'] = temporal_debug_cfg
     dataset = DATASETS.build(dataset_cfg)
+    temporal_training = bool(is_training and dataset_cfg.get('use_temporal', False))
 
     sampler = None
     shuffle = is_training
@@ -148,10 +207,21 @@ def build_dataloader(cfg, is_training=True):
 
     dataloader_kwargs = {}
     if int(dataloader_cfg.get('num_workers', 0)) > 0:
-        dataloader_kwargs['persistent_workers'] = bool(dataloader_perf_cfg.get('persistent_workers', True))
+        persistent_workers = bool(dataloader_perf_cfg.get('persistent_workers', True))
+        if temporal_training and persistent_workers and not bool(temporal_cfg.get('allow_persistent_workers', False)):
+            persistent_workers = False
+            print(
+                '[DataLoader] Temporal training detected; forcing persistent_workers=False '
+                'so epoch state and worker lifecycle stay deterministic.'
+            )
+        dataloader_kwargs['persistent_workers'] = persistent_workers
         prefetch_factor = dataloader_perf_cfg.get('prefetch_factor', None)
         if prefetch_factor is not None:
             dataloader_kwargs['prefetch_factor'] = max(1, int(prefetch_factor))
+        timeout_seconds = max(0, int(dataloader_perf_cfg.get('timeout_seconds', 0) or 0))
+        if timeout_seconds > 0:
+            dataloader_kwargs['timeout'] = timeout_seconds
+        dataloader_kwargs['worker_init_fn'] = _dataloader_worker_init_fn
 
     dataloader = DataLoader(
         dataset,
@@ -159,7 +229,7 @@ def build_dataloader(cfg, is_training=True):
         shuffle=shuffle,
         sampler=sampler,
         num_workers=dataloader_cfg.get('num_workers', 0),
-        collate_fn=collate_fn,
+        collate_fn=build_collate_fn(temporal_debug_cfg if temporal_training else None),
         pin_memory=bool(dataloader_cfg.get('pin_memory', True)),
         drop_last=is_training,
         **dataloader_kwargs,

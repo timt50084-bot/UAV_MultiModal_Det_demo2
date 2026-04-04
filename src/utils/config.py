@@ -237,6 +237,7 @@ def _append_misplaced_field_warnings(cfg, meta):
         ('profile_train', 'performance.profile_train'),
         ('persistent_workers', 'performance.dataloader.persistent_workers'),
         ('prefetch_factor', 'performance.dataloader.prefetch_factor'),
+        ('timeout_seconds', 'performance.dataloader.timeout_seconds'),
     ]
     for misplaced_path, canonical_path in misplaced_specs:
         if _path_exists(cfg, misplaced_path):
@@ -313,6 +314,11 @@ def _normalize_config(cfg, layers):
             'default': 2,
         },
         {
+            'canonical': 'performance.dataloader.timeout_seconds',
+            'aliases': [],
+            'default': 0,
+        },
+        {
             'canonical': 'model.temporal.enabled',
             'aliases': ['model.temporal_enabled'],
             'default': False,
@@ -351,7 +357,7 @@ def _normalize_config(cfg, layers):
                     f"dataloader.{key} is not consumed by the current training code and will be ignored."
                 )
 
-    known_perf_dataloader_keys = {'persistent_workers', 'prefetch_factor'}
+    known_perf_dataloader_keys = {'persistent_workers', 'prefetch_factor', 'timeout_seconds'}
     perf_dataloader_cfg = _path_get(cfg, 'performance.dataloader', {})
     if _is_mapping(perf_dataloader_cfg):
         for key in perf_dataloader_cfg.keys():

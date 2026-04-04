@@ -51,8 +51,11 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         cfg = self._load_and_build('configs/exp_temporal_main.yaml')
         self.assertEqual(cfg.experiment.name, 'temporal_main')
         self.assertEqual(cfg.model.temporal.mode, 'two_frame')
+        self.assertAlmostEqual(float(cfg.loss.temporal_weight), 0.1, places=6)
         self.assertAlmostEqual(float(cfg.loss.temporal_warmup_epochs), 2.0, places=6)
         self.assertAlmostEqual(float(cfg.loss.temporal_max_loss), 0.2, places=6)
+        self.assertFalse(bool(cfg.performance.dataloader.persistent_workers))
+        self.assertEqual(int(cfg.performance.dataloader.timeout_seconds), 120)
 
     def test_full_project_config_loads(self):
         cfg = self._load_and_build('configs/exp_full_project.yaml')

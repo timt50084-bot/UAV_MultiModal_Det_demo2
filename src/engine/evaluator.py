@@ -34,7 +34,9 @@ class Evaluator:
             self.rank = dist.get_rank()
 
     def _maybe_reset_model_temporal_state(self, model):
-        if hasattr(model, 'reset_temporal_memory'):
+        if hasattr(model, 'reset_temporal_state'):
+            model.reset_temporal_state(clear_memory=True)
+        elif hasattr(model, 'reset_temporal_memory'):
             model.reset_temporal_memory()
 
     def _apply_drop_mode(self, imgs_rgb, imgs_ir, rgb_drop_mode=None, ir_drop_mode=None):

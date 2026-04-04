@@ -1,8 +1,10 @@
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
 import torch
+from torch.utils.data import get_worker_info
 
 from src.data.transforms.augmentations import MultiModalAugmentationPipeline
 from src.registry.data_registry import DATASETS
@@ -37,6 +39,14 @@ class DroneDualDataset(BaseDataset):
         self.use_temporal = use_temporal
         self.temporal_stride = max(1, int(temporal_stride))
         self.rgb_files = sorted(list((self.root_dir / 'images' / 'img').glob('*.jpg')))
+        temporal_debug = kwargs.get('temporal_debug', {})
+        if not isinstance(temporal_debug, dict):
+            temporal_debug = {}
+        self.temporal_debug_enabled = bool(temporal_debug.get('enabled', False))
+        self.temporal_sample_log_interval = max(0, int(temporal_debug.get('sample_log_interval', 0)))
+        self.temporal_slow_sample_ms = float(temporal_debug.get('slow_sample_ms', 500.0))
+        self._prev_fallback_warning_limit = max(1, int(temporal_debug.get('prev_fallback_warning_limit', 5)))
+        self._prev_fallback_warning_count = 0
 
         aug_kwargs = aug_cfg if aug_cfg is not None else {}
         self.aug_pipeline = MultiModalAugmentationPipeline(**aug_kwargs) if is_training else None
@@ -44,7 +54,68 @@ class DroneDualDataset(BaseDataset):
     def __len__(self):
         return len(self.rgb_files)
 
+    @staticmethod
+    def _worker_id():
+        worker_info = get_worker_info()
+        return worker_info.id if worker_info is not None else 'main'
+
+    def _format_sample_debug(self, idx, prev_idx, rgb_path, prev_rgb_path):
+        return (
+            f"worker={self._worker_id()} epoch={self.current_epoch + 1} idx={idx} prev_idx={prev_idx} "
+            f"frame={rgb_path.name} prev_frame={prev_rgb_path.name}"
+        )
+
+    def _read_image_or_raise(self, image_path, idx, prev_idx, rgb_path, prev_rgb_path, role):
+        image = cv2.imread(str(image_path))
+        if image is not None:
+            return image
+        raise RuntimeError(
+            f"[TemporalData] failed to read {role} image: {image_path} "
+            f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+        )
+
+    def _read_prev_image_with_fallback(self, image_path, fallback_image, idx, prev_idx, rgb_path, prev_rgb_path, role):
+        image = cv2.imread(str(image_path))
+        if image is not None:
+            return image
+        if self._prev_fallback_warning_count < self._prev_fallback_warning_limit:
+            print(
+                f"[TemporalData] prev-frame fallback role={role} missing={image_path} "
+                f"using_current_frame ({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+            )
+            self._prev_fallback_warning_count += 1
+        return fallback_image.copy()
+
+    def _load_labels(self, label_path, idx, prev_idx, rgb_path, prev_rgb_path):
+        labels = []
+        if not label_path.exists():
+            return np.array(labels, dtype=np.float32)
+        try:
+            with open(label_path, 'r') as handle:
+                labels = [[float(x) for x in line.strip().split()] for line in handle.readlines()]
+        except Exception as exc:
+            raise RuntimeError(
+                f"[TemporalData] failed to parse labels: {label_path} "
+                f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+            ) from exc
+        return np.array(labels, dtype=np.float32)
+
+    def _maybe_log_sample(self, idx, prev_idx, rgb_path, prev_rgb_path, label_count, elapsed_ms):
+        if not self.temporal_debug_enabled:
+            return
+        should_log = False
+        if self.temporal_sample_log_interval > 0 and (idx % self.temporal_sample_log_interval == 0):
+            should_log = True
+        if elapsed_ms >= self.temporal_slow_sample_ms:
+            should_log = True
+        if should_log:
+            print(
+                f"[TemporalData] {self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)} "
+                f"labels={label_count} elapsed_ms={elapsed_ms:.1f}"
+            )
+
     def __getitem__(self, idx):
+        sample_start = time.perf_counter()
         rgb_path = self.rgb_files[idx]
         ir_path = self.root_dir / 'images' / 'imgr' / rgb_path.name
         label_path = self.root_dir / 'labels' / 'merged' / (rgb_path.stem + '.txt')
@@ -52,13 +123,26 @@ class DroneDualDataset(BaseDataset):
         prev_rgb_path = self.rgb_files[prev_idx]
         prev_ir_path = self.root_dir / 'images' / 'imgr' / prev_rgb_path.name
 
-        img_rgb = cv2.imread(str(rgb_path))
-        img_ir = cv2.imread(str(ir_path))
-        prev_rgb = cv2.imread(str(prev_rgb_path))
-        prev_ir = cv2.imread(str(prev_ir_path))
-
-        if img_rgb is None or img_ir is None or prev_rgb is None or prev_ir is None:
-            raise ValueError(f"Failed to read image pair: {rgb_path}")
+        img_rgb = self._read_image_or_raise(rgb_path, idx, prev_idx, rgb_path, prev_rgb_path, role='rgb')
+        img_ir = self._read_image_or_raise(ir_path, idx, prev_idx, rgb_path, prev_rgb_path, role='ir')
+        prev_rgb = self._read_prev_image_with_fallback(
+            prev_rgb_path,
+            fallback_image=img_rgb,
+            idx=idx,
+            prev_idx=prev_idx,
+            rgb_path=rgb_path,
+            prev_rgb_path=prev_rgb_path,
+            role='prev_rgb',
+        )
+        prev_ir = self._read_prev_image_with_fallback(
+            prev_ir_path,
+            fallback_image=img_ir,
+            idx=idx,
+            prev_idx=prev_idx,
+            rgb_path=rgb_path,
+            prev_rgb_path=prev_rgb_path,
+            role='prev_ir',
+        )
 
         h_old, w_old = img_rgb.shape[:2]
 
@@ -67,11 +151,7 @@ class DroneDualDataset(BaseDataset):
         prev_rgb, _, _, _ = letterbox(prev_rgb, (self.img_size, self.img_size))
         prev_ir, _, _, _ = letterbox(prev_ir, (self.img_size, self.img_size))
 
-        labels = []
-        if label_path.exists():
-            with open(label_path, 'r') as f:
-                labels = [[float(x) for x in line.strip().split()] for line in f.readlines()]
-        labels = np.array(labels, dtype=np.float32)
+        labels = self._load_labels(label_path, idx, prev_idx, rgb_path, prev_rgb_path)
 
         if len(labels) > 0:
             labels[:, 1] = (labels[:, 1] * w_old * r + dw) / self.img_size
@@ -99,4 +179,12 @@ class DroneDualDataset(BaseDataset):
         else:
             labels = torch.from_numpy(labels).float()
 
+        self._maybe_log_sample(
+            idx=idx,
+            prev_idx=prev_idx,
+            rgb_path=rgb_path,
+            prev_rgb_path=prev_rgb_path,
+            label_count=int(labels.shape[0]),
+            elapsed_ms=(time.perf_counter() - sample_start) * 1000.0,
+        )
         return img_rgb, img_ir, labels, prev_rgb, prev_ir

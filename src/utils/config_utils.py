@@ -88,5 +88,6 @@ def format_effective_train_config_summary(cfg, config_path, resolved_config_path
         f"  Effective performance.profile_train: {get_config_value(cfg, 'performance.profile_train')}",
         f"  Effective performance.dataloader.persistent_workers: {get_config_value(cfg, 'performance.dataloader.persistent_workers')}",
         f"  Effective performance.dataloader.prefetch_factor: {get_config_value(cfg, 'performance.dataloader.prefetch_factor')}",
+        f"  Effective performance.dataloader.timeout_seconds: {get_config_value(cfg, 'performance.dataloader.timeout_seconds')}",
     ])
     return '\n'.join(lines)

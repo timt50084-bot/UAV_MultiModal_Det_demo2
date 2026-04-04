@@ -92,6 +92,11 @@ class Trainer:
         self.debug_anomaly_steps = max(1, int(self.performance_cfg.get('debug_anomaly_steps', 5)))
         self.loss_alert_threshold = float(self.performance_cfg.get('loss_alert_threshold', 20.0))
         self.pred_alert_threshold = float(self.performance_cfg.get('pred_alert_threshold', 50.0))
+        temporal_debug_cfg = self.performance_cfg.get('temporal_debug', {}) if isinstance(self.performance_cfg, dict) else {}
+        if not isinstance(temporal_debug_cfg, dict):
+            temporal_debug_cfg = {}
+        self.temporal_debug_enabled = bool(temporal_debug_cfg.get('enabled', False))
+        self.temporal_log_epoch_reset = bool(temporal_debug_cfg.get('log_epoch_reset', True))
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
@@ -393,6 +398,34 @@ class Trainer:
         epoch_number = epoch + 1
         return (epoch_number % self.eval_interval == 0) or (epoch_number == self.epochs)
 
+    def _reset_model_temporal_state(self, clear_memory=False, epoch=None, iteration_idx=None, reason=None):
+        if hasattr(self.model, 'reset_temporal_state'):
+            self.model.reset_temporal_state(clear_memory=clear_memory)
+        elif clear_memory and hasattr(self.model, 'reset_temporal_memory'):
+            self.model.reset_temporal_memory()
+        elif hasattr(self.model, 'clear_temporal_step_state'):
+            self.model.clear_temporal_step_state()
+        elif hasattr(self.model, 'last_temporal_state'):
+            self.model.last_temporal_state = None
+
+        if not (self.temporal_debug_enabled and self.temporal_log_epoch_reset):
+            return
+        if not getattr(self.model, 'temporal_enabled', False):
+            return
+        state_fn = getattr(self.model, 'get_temporal_debug_state', None)
+        state = state_fn() if callable(state_fn) else {}
+        prefix = '[TemporalState]'
+        if epoch is not None:
+            prefix += f"[Epoch {epoch + 1}]"
+        if iteration_idx is not None:
+            prefix += f"[Iter {iteration_idx + 1}]"
+        print(
+            f"{prefix} reset reason={reason or 'unspecified'} clear_memory={clear_memory} "
+            f"mode={state.get('mode', 'unknown')} "
+            f"memory={state.get('memory_size', 0)}/{state.get('memory_len', 0)} "
+            f"has_step_state={state.get('has_step_state', False)}"
+        )
+
     def format_targets(self, targets, batch_size):
         if targets.numel() == 0:
             gt_labels = torch.zeros((batch_size, 0, 1), device=self.device)
@@ -428,20 +461,31 @@ class Trainer:
             self.current_epoch = epoch
 
             self.model.train()
+            self._reset_model_temporal_state(clear_memory=True, epoch=epoch, reason='epoch_begin')
             train_dataset = getattr(self.train_loader, 'dataset', None)
             if hasattr(train_dataset, 'set_epoch'):
                 train_dataset.set_epoch(epoch, self.epochs)
 
             self.trigger_callbacks('on_epoch_begin')
 
-            pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.epochs}")
+            num_batches = len(self.train_loader)
+            train_iter = iter(self.train_loader)
+            pbar = tqdm(total=num_batches, desc=f"Epoch {epoch + 1}/{self.epochs}")
             self.optimizer.zero_grad()
             total_loss_epoch = None
             total_angle_epoch = None
             timing_profile = TrainTimingProfile(enabled=self.profile_train, max_iters=self.profile_iters)
             last_iter_end = time.perf_counter()
 
-            for i, (imgs_rgb, imgs_ir, targets, prev_rgb, prev_ir) in enumerate(pbar):
+            for i in range(num_batches):
+                try:
+                    imgs_rgb, imgs_ir, targets, prev_rgb, prev_ir = next(train_iter)
+                except StopIteration:
+                    break
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Training dataloader failed at epoch {epoch + 1}, batch {i + 1}/{num_batches}."
+                    ) from exc
                 self.trigger_callbacks('on_batch_begin')
                 if i == 0:
                     print(f'First train batch imgs_rgb.shape: {tuple(imgs_rgb.shape)}')
@@ -549,6 +593,7 @@ class Trainer:
                         pred_scores=pred_scores,
                         matched_pred_box=matched_pred_box,
                     )
+                    self._reset_model_temporal_state(clear_memory=False, epoch=epoch, iteration_idx=i, reason='post_forward')
                     if profile_iter:
                         stage_times['loss_time'] = self._profile_stamp() - stage_start
 
@@ -584,6 +629,7 @@ class Trainer:
                         )
                     print("\nWarning: encountered non-finite loss, skipping batch.")
                     self.optimizer.zero_grad()
+                    pbar.update(1)
                     continue
 
                 if profile_iter:
@@ -644,6 +690,7 @@ class Trainer:
                         avg_angle = 0.0 if total_angle_epoch is None else total_angle_epoch.item() / (i + 1)
                         postfix["Angle"] = self._format_loss_for_display(avg_angle)
                     pbar.set_postfix(postfix)
+                pbar.update(1)
 
                 if profile_iter:
                     iter_end = self._profile_stamp()
@@ -654,6 +701,7 @@ class Trainer:
                     last_iter_end = iter_end
                 else:
                     last_iter_end = time.perf_counter()
+            pbar.close()
 
             self.scheduler.step()
 
@@ -672,5 +720,6 @@ class Trainer:
                 print(f"\n{timing_profile.format_summary(epoch + 1, eval_time=eval_time)}")
 
             self.trigger_callbacks('on_epoch_end')
+            self._reset_model_temporal_state(clear_memory=True, epoch=epoch, reason='epoch_end')
 
         self.trigger_callbacks('on_train_end')

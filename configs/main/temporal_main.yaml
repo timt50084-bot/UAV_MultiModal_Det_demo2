@@ -6,6 +6,13 @@ experiment:
   output_root: 'outputs/experiments'
   enable_unified_dirs: True
 
+performance:
+  dataloader:
+    persistent_workers: False
+    timeout_seconds: 120
+  temporal_debug:
+    enabled: False
+
 model:
   fusion_att_type: null
   fusion:
@@ -25,6 +32,7 @@ assigner:
   use_angle_aware_assign: False
 
 loss:
+  temporal_weight: 0.1
   temporal_warmup_epochs: 2.0
   temporal_ramp_epochs: 4.0
   temporal_max_loss: 0.2
