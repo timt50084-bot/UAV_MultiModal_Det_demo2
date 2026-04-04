@@ -28,7 +28,7 @@ class TemporalRefineBlock(nn.Module):
         self.residual_scale = nn.Parameter(torch.tensor(0.15, dtype=torch.float32))
 
     def forward(self, current_feat, prev_feat):
-        temporal_diff = current_feat - prev_feat
+        temporal_diff = torch.nan_to_num(current_feat - prev_feat, nan=0.0, posinf=0.0, neginf=0.0)
         motion_seed = torch.cat(
             [temporal_diff.abs().mean(dim=1, keepdim=True), temporal_diff.abs().amax(dim=1, keepdim=True)],
             dim=1
@@ -37,6 +37,9 @@ class TemporalRefineBlock(nn.Module):
         gated_prev = prev_feat * self.gate(torch.cat([current_feat, prev_feat, temporal_diff.abs()], dim=1))
         fused = torch.cat([current_feat, gated_prev, temporal_diff * (0.5 + motion_mask)], dim=1)
         out = self.refine(fused) + torch.tanh(self.residual_scale) * current_feat
+        if not torch.isfinite(out).all():
+            out = current_feat
+            motion_mask = torch.zeros_like(motion_mask)
         return out, motion_mask
 
 

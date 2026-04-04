@@ -43,12 +43,16 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
     def test_assigner_main_config_loads(self):
         cfg = self._load_and_build('configs/exp_assigner_main.yaml')
         self.assertEqual(cfg.experiment.name, 'assigner_main')
+        self.assertEqual(cfg.model.temporal.mode, 'off')
+        self.assertAlmostEqual(float(cfg.loss.temporal_weight), 0.0, places=6)
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
 
     def test_temporal_main_config_loads(self):
         cfg = self._load_and_build('configs/exp_temporal_main.yaml')
         self.assertEqual(cfg.experiment.name, 'temporal_main')
         self.assertEqual(cfg.model.temporal.mode, 'two_frame')
+        self.assertAlmostEqual(float(cfg.loss.temporal_warmup_epochs), 2.0, places=6)
+        self.assertAlmostEqual(float(cfg.loss.temporal_max_loss), 0.2, places=6)
 
     def test_full_project_config_loads(self):
         cfg = self._load_and_build('configs/exp_full_project.yaml')
@@ -63,6 +67,8 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(cfg.train.lr), 0.0003, places=7)
         self.assertFalse(bool(cfg.train.use_amp))
         self.assertEqual(cfg.model.temporal.mode, 'two_frame')
+        self.assertAlmostEqual(float(cfg.loss.temporal_warmup_epochs), 2.0, places=6)
+        self.assertAlmostEqual(float(cfg.loss.temporal_max_loss), 0.2, places=6)
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
 
     def test_formal_mainline_variants_load(self):

@@ -61,6 +61,9 @@ class YOLODualModalOBB(nn.Module):
         self.temporal_memory_len = temporal_cfg.get('memory_len', 3)
         self.temporal_aggregator = temporal_cfg.get('aggregator', 'weighted_avg')
         self.temporal_gate_hidden_ratio = temporal_cfg.get('gate_hidden_ratio', 0.25)
+        self.temporal_consistency_feature_clip = float(temporal_cfg.get('consistency_feature_clip', 5.0))
+        self.temporal_consistency_level_cap = float(temporal_cfg.get('consistency_level_cap', 2.0))
+        self.temporal_consistency_eps = float(temporal_cfg.get('consistency_eps', 1e-6))
 
         self.backbone = AsymmetricDualBackbone(channels=self.channels, norm_type=self.norm_type)
         self.fusion = self._build_fusion_module(fusion, fusion_att_type)
@@ -214,22 +217,22 @@ class YOLODualModalOBB(nn.Module):
         temporal_maps = {}
         if self.temporal_mode == 'two_frame':
             current_feats_before_temporal = enhanced_feats
-            if prev_rgb is None or prev_ir is None:
-                prev_enhanced_feats = self._clone_feature_tuple(enhanced_feats)
-            else:
+            reference_valid = prev_rgb is not None and prev_ir is not None
+            prev_enhanced_feats = None
+            if reference_valid:
                 prev_enhanced_feats, _, _, _, _ = self._extract_features(prev_rgb, prev_ir, return_attention_map=False)
-
-            enhanced_feats, temporal_maps = self.temporal_fpn(
-                enhanced_feats,
-                prev_enhanced_feats,
-                return_attention_map=True,
-                target_size=target_hw if return_attention_map else None,
-            )
+                enhanced_feats, temporal_maps = self.temporal_fpn(
+                    enhanced_feats,
+                    prev_enhanced_feats,
+                    return_attention_map=True,
+                    target_size=target_hw if return_attention_map else None,
+                )
             self.last_temporal_state = {
                 'current_feats_before_temporal': current_feats_before_temporal,
                 'current_feats_after_temporal': enhanced_feats,
                 'reference_feats': prev_enhanced_feats,
                 'temporal_maps': temporal_maps,
+                'reference_valid': reference_valid,
             }
         elif self.temporal_mode == 'memory':
             # Compatibility-only branch for archived detection experiments.
@@ -245,16 +248,14 @@ class YOLODualModalOBB(nn.Module):
                 return_attention_map=True,
                 target_size=target_hw if return_attention_map else None,
             )
-            reference_feats = (
-                resolved_memory_steps[-1]
-                if resolved_memory_steps
-                else self._clone_feature_tuple(current_feats_before_temporal)
-            )
+            reference_valid = bool(resolved_memory_steps)
+            reference_feats = resolved_memory_steps[-1] if resolved_memory_steps else None
             self.last_temporal_state = {
                 'current_feats_before_temporal': current_feats_before_temporal,
                 'current_feats_after_temporal': enhanced_feats,
                 'reference_feats': reference_feats,
                 'temporal_maps': temporal_maps,
+                'reference_valid': reference_valid,
             }
             self.update_temporal_memory(current_feats_before_temporal)
 
@@ -284,6 +285,8 @@ class YOLODualModalOBB(nn.Module):
         current_feats = self.last_temporal_state['current_feats_after_temporal']
         reference_feats = self.last_temporal_state['reference_feats']
         temporal_maps = self.last_temporal_state['temporal_maps']
+        if not self.last_temporal_state.get('reference_valid', False) or not reference_feats:
+            return None
 
         losses = []
         level_names = ['P2', 'P3', 'P4', 'P5']
@@ -295,18 +298,49 @@ class YOLODualModalOBB(nn.Module):
             low_motion_weight = (1.0 - motion_map.detach()).clamp(min=0.0, max=1.0)
             low_motion_weight = low_motion_bias + (1.0 - low_motion_bias) * low_motion_weight
 
-            pooled_current = F.adaptive_avg_pool2d(current_feat * low_motion_weight, 1).flatten(1)
-            pooled_prev = F.adaptive_avg_pool2d(prev_feat.detach() * low_motion_weight, 1).flatten(1)
-            pooled_current = F.normalize(pooled_current, dim=1)
-            pooled_prev = F.normalize(pooled_prev, dim=1)
-            cosine_term = 1.0 - (pooled_current * pooled_prev).sum(dim=1)
+            current_feat = torch.nan_to_num(
+                current_feat,
+                nan=0.0,
+                posinf=self.temporal_consistency_feature_clip,
+                neginf=-self.temporal_consistency_feature_clip,
+            )
+            prev_feat = torch.nan_to_num(
+                prev_feat.detach(),
+                nan=0.0,
+                posinf=self.temporal_consistency_feature_clip,
+                neginf=-self.temporal_consistency_feature_clip,
+            )
+            feature_scale = torch.maximum(
+                current_feat.detach().abs().mean(dim=(1, 2, 3), keepdim=True),
+                prev_feat.abs().mean(dim=(1, 2, 3), keepdim=True),
+            ).clamp(min=1.0)
+            current_weighted = ((current_feat / feature_scale) * low_motion_weight).clamp(
+                min=-self.temporal_consistency_feature_clip,
+                max=self.temporal_consistency_feature_clip,
+            )
+            prev_weighted = ((prev_feat / feature_scale) * low_motion_weight).clamp(
+                min=-self.temporal_consistency_feature_clip,
+                max=self.temporal_consistency_feature_clip,
+            )
+
+            pooled_current = F.adaptive_avg_pool2d(current_weighted, 1).flatten(1)
+            pooled_prev = F.adaptive_avg_pool2d(prev_weighted, 1).flatten(1)
+            pooled_current = F.normalize(pooled_current, dim=1, eps=self.temporal_consistency_eps)
+            pooled_prev = F.normalize(pooled_prev, dim=1, eps=self.temporal_consistency_eps)
+            cosine_term = (1.0 - (pooled_current * pooled_prev).sum(dim=1)).clamp(min=0.0, max=2.0)
 
             spatial_term = F.smooth_l1_loss(
-                current_feat * low_motion_weight,
-                prev_feat.detach() * low_motion_weight,
+                current_weighted,
+                prev_weighted,
                 reduction='none',
-            ).mean(dim=(1, 2, 3))
-            losses.append((cosine_term + spatial_term).mean())
+            ).mean(dim=(1, 2, 3)).clamp(min=0.0, max=self.temporal_consistency_level_cap)
+            level_loss = torch.nan_to_num(
+                cosine_term + spatial_term,
+                nan=0.0,
+                posinf=self.temporal_consistency_level_cap,
+                neginf=0.0,
+            ).clamp(min=0.0, max=self.temporal_consistency_level_cap)
+            losses.append(level_loss.mean())
 
         return current_feats[0].new_tensor(lambda_t) * torch.stack(losses).mean()
 

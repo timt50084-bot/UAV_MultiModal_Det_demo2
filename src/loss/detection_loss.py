@@ -61,6 +61,8 @@ class ProbIoULoss(nn.Module):
 class UAVDualModalLoss(nn.Module):
     def __init__(self, num_classes=5, alpha=0.25, gamma=2.0, use_scale_weight=True,
                  temporal_weight=0.1, temporal_low_motion_bias=0.75,
+                 temporal_warmup_epochs=0.0, temporal_ramp_epochs=0.0,
+                 temporal_max_loss=None, temporal_skip_loss_threshold=None,
                  angle_enabled=False, angle_weight=0.0, angle_type='wrapped_smooth_l1', angle_beta=0.1):
         super().__init__()
         self.nc = num_classes
@@ -71,6 +73,13 @@ class UAVDualModalLoss(nn.Module):
         self.gamma = gamma
         self.temporal_weight = temporal_weight
         self.temporal_low_motion_bias = temporal_low_motion_bias
+        self.temporal_warmup_epochs = max(0.0, float(temporal_warmup_epochs))
+        self.temporal_ramp_epochs = max(0.0, float(temporal_ramp_epochs))
+        self.temporal_max_loss = float(temporal_max_loss) if temporal_max_loss is not None else float('inf')
+        self.temporal_skip_loss_threshold = (
+            float(temporal_skip_loss_threshold)
+            if temporal_skip_loss_threshold is not None else float('inf')
+        )
         self.angle_enabled = bool(angle_enabled)
         self.angle_weight = float(angle_weight)
         self.angle_type = str(angle_type)
@@ -106,9 +115,11 @@ class UAVDualModalLoss(nn.Module):
     def forward(self, matched_pred_cls, matched_pred_box, matched_tgt_cls, matched_tgt_box,
                 contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
         if not torch.is_tensor(contrastive_loss):
-            contrastive_loss = matched_pred_box.new_tensor(0.0)
+            contrastive_loss = matched_pred_box.new_tensor(float(contrastive_loss))
         if not torch.is_tensor(temporal_loss):
-            temporal_loss = matched_pred_box.new_tensor(0.0)
+            temporal_loss = matched_pred_box.new_tensor(float(temporal_loss))
+        contrastive_loss = torch.nan_to_num(contrastive_loss, nan=0.0, posinf=0.0, neginf=0.0)
+        temporal_loss = torch.nan_to_num(temporal_loss, nan=0.0, posinf=0.0, neginf=0.0)
 
         loss_reg_raw, prob_iou = self.prob_iou_loss(matched_pred_box, matched_tgt_box)
 

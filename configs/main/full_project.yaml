@@ -52,6 +52,8 @@ model:
   temporal:
     enabled: True
     mode: 'two_frame'
+    consistency_feature_clip: 5.0
+    consistency_level_cap: 2.0
 
 assigner:
   lambda_theta: 1.5
@@ -63,6 +65,10 @@ assigner:
 loss:
   temporal_weight: 0.1
   temporal_low_motion_bias: 0.75
+  temporal_warmup_epochs: 2.0
+  temporal_ramp_epochs: 4.0
+  temporal_max_loss: 0.2
+  temporal_skip_loss_threshold: 1.0
 
 eval:
   small_object:

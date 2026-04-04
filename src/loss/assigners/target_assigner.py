@@ -48,8 +48,8 @@ class DynamicTinyOBBAssigner(nn.Module):
             )
 
         align_metric, overlaps = self.get_box_metrics(pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes)
-        align_metric = align_metric.detach()
-        overlaps = overlaps.detach()
+        align_metric = torch.nan_to_num(align_metric.detach(), nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0)
+        overlaps = torch.nan_to_num(overlaps.detach(), nan=0.0, posinf=1.0, neginf=0.0).clamp(min=0.0, max=1.0)
 
         is_in_centers = self.select_candidates_in_gts(anchor_points, gt_bboxes)
         is_in_centers = self.apply_tiny_object_fallback(anchor_points, gt_bboxes, is_in_centers, mask_gt)
@@ -211,7 +211,9 @@ class DynamicTinyOBBAssigner(nn.Module):
         candidate_budget = self._compute_candidate_budget(gt_bboxes, num_anchors).to(device)
         max_topk = max(int(candidate_budget.max().item()) if candidate_budget.numel() > 0 else self.topk, 1)
         topk_metrics, topk_idxs = torch.topk(align_metric, max_topk, dim=-1, largest=True)
+        topk_metrics = torch.nan_to_num(topk_metrics, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0)
         topk_overlaps = torch.gather(overlaps, 2, topk_idxs)
+        topk_overlaps = torch.nan_to_num(topk_overlaps, nan=0.0, posinf=1.0, neginf=0.0).clamp(min=0.0, max=1.0)
         dynamic_k = torch.round(topk_overlaps.sum(dim=-1))
         dynamic_k = torch.maximum(dynamic_k, torch.ones_like(dynamic_k))
         dynamic_k = torch.minimum(dynamic_k, candidate_budget.float()).int()
@@ -234,12 +236,14 @@ class DynamicTinyOBBAssigner(nn.Module):
 
         align_metric_max = align_metric.max(dim=1, keepdim=True)[0]
         norm_align_metric = (align_metric / (align_metric_max + self.eps)) * overlaps.permute(0, 2, 1)
+        norm_align_metric = torch.nan_to_num(norm_align_metric, nan=0.0, posinf=1.0, neginf=0.0).clamp(min=0.0, max=1.0)
 
         target_scores_raw = norm_align_metric[
             batch_idx,
             torch.arange(num_anchors, device=device).unsqueeze(0).repeat(batch_size, 1),
             anchor_to_gt_idx
         ]
+        target_scores_raw = torch.nan_to_num(target_scores_raw, nan=0.0, posinf=1.0, neginf=0.0).clamp(min=0.0, max=1.0)
 
         target_scores = torch.zeros_like(pred_scores)
         valid_mask = (target_labels >= 0) & (target_labels < self.num_classes) & is_pos_mask

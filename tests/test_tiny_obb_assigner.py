@@ -127,6 +127,36 @@ class TinyOBBAssignerTestCase(unittest.TestCase):
         self.assertTrue(torch.isfinite(target_bboxes).all())
         self.assertTrue(torch.isfinite(target_scores).all())
 
+    def test_forward_sanitizes_non_finite_inputs(self):
+        assigner = DynamicTinyOBBAssigner(num_classes=1, topk=3)
+        pred_scores = torch.tensor([[
+            [float('nan')],
+            [float('inf')],
+            [0.5],
+        ]])
+        pred_bboxes = torch.tensor([[[
+            0.10, 0.10, 0.05, 0.05, 0.0
+        ], [
+            0.12, 0.12, 0.05, 0.05, 0.0
+        ], [
+            0.14, 0.14, 0.05, 0.05, 0.0
+        ]]])
+        anchor_points = pred_bboxes[0, :, :2]
+        gt_labels = torch.tensor([[[0]]], dtype=torch.long)
+        gt_bboxes = torch.tensor([[[0.10, 0.10, 0.05, 0.05, 0.0]]])
+        mask_gt = torch.ones((1, 1, 1), dtype=torch.float32)
+
+        target_labels, target_bboxes, target_scores, is_pos = assigner(
+            pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes, mask_gt
+        )
+
+        self.assertEqual(target_labels.shape, (1, 3))
+        self.assertEqual(target_bboxes.shape, (1, 3, 5))
+        self.assertEqual(target_scores.shape, (1, 3, 1))
+        self.assertEqual(is_pos.shape, (1, 3))
+        self.assertTrue(torch.isfinite(target_bboxes).all())
+        self.assertTrue(torch.isfinite(target_scores).all())
+
 
 if __name__ == "__main__":
     unittest.main()

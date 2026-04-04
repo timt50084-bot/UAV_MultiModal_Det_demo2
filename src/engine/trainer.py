@@ -1,3 +1,4 @@
+import math
 import re
 import time
 
@@ -89,12 +90,16 @@ class Trainer:
         self.profile_cuda = bool(self.performance_cfg.get('profile_cuda', self.device.type == 'cuda'))
         self.debug_loss_steps = max(0, int(self.performance_cfg.get('debug_loss_steps', 0)))
         self.debug_anomaly_steps = max(1, int(self.performance_cfg.get('debug_anomaly_steps', 5)))
+        self.loss_alert_threshold = float(self.performance_cfg.get('loss_alert_threshold', 20.0))
+        self.pred_alert_threshold = float(self.performance_cfg.get('pred_alert_threshold', 50.0))
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
         self.scaler = make_grad_scaler(self.device.type, enabled=self.use_amp)
         self._anchor_cache = {}
         self._debug_zero_pos_count = 0
+        self._debug_loss_anomaly_count = 0
+        self._named_warning_counts = {}
 
         self.current_epoch = 0
         self.current_metrics = None
@@ -144,6 +149,19 @@ class Trainer:
         self._debug_zero_pos_count += 1
         return True
 
+    def _should_log_loss_anomaly(self):
+        if self._debug_loss_anomaly_count >= self.debug_anomaly_steps:
+            return False
+        self._debug_loss_anomaly_count += 1
+        return True
+
+    def _should_log_named_warning(self, name):
+        count = self._named_warning_counts.get(name, 0)
+        if count >= self.debug_anomaly_steps:
+            return False
+        self._named_warning_counts[name] = count + 1
+        return True
+
     def _collect_grad_debug(self):
         total_tensors = 0
         grad_tensors = 0
@@ -167,6 +185,125 @@ class Trainer:
             'nonzero_grad_tensors': nonzero_grad_tensors,
         }
 
+    @staticmethod
+    def _tensor_stats(tensor, apply_sigmoid=False):
+        if tensor is None:
+            return {'count': 0, 'finite': True, 'nonfinite_count': 0, 'min': None, 'max': None}
+
+        detached = tensor.detach().float()
+        if apply_sigmoid:
+            detached = detached.sigmoid()
+        if detached.numel() == 0:
+            return {'count': 0, 'finite': True, 'nonfinite_count': 0, 'min': None, 'max': None}
+
+        finite_mask = torch.isfinite(detached)
+        nonfinite_count = int((~finite_mask).sum().item())
+        if finite_mask.any():
+            finite_values = detached[finite_mask]
+            return {
+                'count': detached.numel(),
+                'finite': nonfinite_count == 0,
+                'nonfinite_count': nonfinite_count,
+                'min': float(finite_values.min().item()),
+                'max': float(finite_values.max().item()),
+            }
+
+        return {
+            'count': detached.numel(),
+            'finite': False,
+            'nonfinite_count': nonfinite_count,
+            'min': None,
+            'max': None,
+        }
+
+    @staticmethod
+    def _format_tensor_stats(stats):
+        if stats['count'] == 0:
+            return 'empty'
+        if stats['min'] is None or stats['max'] is None:
+            return f"all_nonfinite(count={stats['nonfinite_count']})"
+        suffix = '' if stats['finite'] else f" nonfinite={stats['nonfinite_count']}"
+        return f"[{stats['min']:.4f}, {stats['max']:.4f}]{suffix}"
+
+    def _compute_temporal_ramp(self, epoch, iteration_idx):
+        if not getattr(self.model, 'temporal_enabled', False):
+            return 0.0
+
+        temporal_weight = float(getattr(self.criterion, 'temporal_weight', 0.0))
+        if temporal_weight <= 0.0:
+            return 0.0
+
+        warmup_epochs = float(getattr(self.criterion, 'temporal_warmup_epochs', 0.0))
+        ramp_epochs = float(getattr(self.criterion, 'temporal_ramp_epochs', 0.0))
+        progress_epoch = float(epoch) + float(iteration_idx + 1) / max(len(self.train_loader), 1)
+        if progress_epoch <= warmup_epochs:
+            return 0.0
+        if ramp_epochs <= 0.0:
+            return 1.0
+        return min(max((progress_epoch - warmup_epochs) / max(ramp_epochs, 1e-6), 0.0), 1.0)
+
+    def _stabilize_auxiliary_loss(self, name, loss_tensor, zero_term, epoch, iteration_idx):
+        if loss_tensor is None:
+            return zero_term, None
+
+        if not torch.is_tensor(loss_tensor):
+            loss_tensor = zero_term + float(loss_tensor)
+
+        if not bool(torch.isfinite(loss_tensor).all().item()):
+            if self._should_log_named_warning(name):
+                print(
+                    f"[TrainDebug][Epoch {epoch + 1} Iter {iteration_idx + 1}] "
+                    f"{name}_loss is non-finite; dropping auxiliary branch for this batch."
+                )
+            return zero_term, f'{name}_non_finite'
+
+        max_loss = float(getattr(self.criterion, f'{name}_max_loss', float('inf')))
+        skip_threshold = float(getattr(self.criterion, f'{name}_skip_loss_threshold', float('inf')))
+        loss_abs = abs(float(loss_tensor.detach().item()))
+
+        if math.isfinite(skip_threshold) and loss_abs > skip_threshold:
+            if self._should_log_named_warning(name):
+                print(
+                    f"[TrainDebug][Epoch {epoch + 1} Iter {iteration_idx + 1}] "
+                    f"{name}_loss={loss_abs:.6f} exceeded skip threshold {skip_threshold:.6f}; skipping."
+                )
+            return zero_term, f'{name}_skipped_large'
+
+        if math.isfinite(max_loss) and loss_abs > max_loss:
+            if self._should_log_named_warning(name):
+                print(
+                    f"[TrainDebug][Epoch {epoch + 1} Iter {iteration_idx + 1}] "
+                    f"{name}_loss={loss_abs:.6f} exceeded cap {max_loss:.6f}; clamping."
+                )
+            loss_tensor = loss_tensor.clamp(min=-max_loss, max=max_loss)
+            return loss_tensor, f'{name}_clamped'
+
+        return loss_tensor, None
+
+    def _detect_loss_anomaly(self, loss_components, loss_total_raw, pred_scores, matched_pred_box):
+        if not bool(torch.isfinite(loss_total_raw).all().item()):
+            return 'total_loss_non_finite'
+
+        for name, value in loss_components.items():
+            if not math.isfinite(value):
+                return f'{name}_non_finite'
+            if abs(value) > self.loss_alert_threshold:
+                return f'{name}_too_large'
+
+        pred_score_stats = self._tensor_stats(pred_scores)
+        if not pred_score_stats['finite']:
+            return 'pred_scores_non_finite'
+        if pred_score_stats['count'] > 0 and max(abs(pred_score_stats['min']), abs(pred_score_stats['max'])) > self.pred_alert_threshold:
+            return 'pred_scores_too_large'
+
+        matched_box_stats = self._tensor_stats(matched_pred_box)
+        if not matched_box_stats['finite']:
+            return 'matched_pred_box_non_finite'
+        if matched_box_stats['count'] > 0 and max(abs(matched_box_stats['min']), abs(matched_box_stats['max'])) > self.pred_alert_threshold:
+            return 'matched_pred_box_too_large'
+
+        return None
+
     def _log_loss_debug(
         self,
         epoch,
@@ -177,12 +314,15 @@ class Trainer:
         flat_preds,
         pred_bboxes,
         pred_scores,
+        target_scores,
         gt_bboxes,
         mask_gt,
         anchor_points,
+        matched_pred_box,
         loss_components,
         loss_total_raw,
         loss_for_backward,
+        temporal_ramp,
         grad_debug=None,
         reason=None,
     ):
@@ -205,6 +345,7 @@ class Trainer:
             f"angle={loss_components['angle']:.6f} "
             f"contrastive={loss_components['contrastive']:.6f} "
             f"temporal={loss_components['temporal']:.6f} "
+            f"temporal_ramp={temporal_ramp:.4f} "
             f"total={loss_total_raw.detach().item():.6f} "
             f"backward_loss={loss_for_backward.detach().item():.6f} "
             f"dfl=n/a"
@@ -212,6 +353,12 @@ class Trainer:
         print(
             f"{prefix} tensor dtype={loss_for_backward.dtype} device={loss_for_backward.device} "
             f"requires_grad={loss_for_backward.requires_grad} finite={finite}"
+        )
+        print(
+            f"{prefix} pred_scores(logit)={self._format_tensor_stats(self._tensor_stats(pred_scores))} "
+            f"pred_scores(prob)={self._format_tensor_stats(self._tensor_stats(pred_scores, apply_sigmoid=True))} "
+            f"target_scores={self._format_tensor_stats(self._tensor_stats(target_scores))} "
+            f"matched_pred_box={self._format_tensor_stats(self._tensor_stats(matched_pred_box))}"
         )
 
         if batch_gt_count > 0:
@@ -346,14 +493,22 @@ class Trainer:
                         contrastive_loss = self.model.get_contrastive_alignment_loss(feat_rgb, feat_ir) * 0.1
 
                     temporal_loss = zero_term
-                    if getattr(self.model, 'temporal_enabled', False):
+                    temporal_ramp = self._compute_temporal_ramp(epoch, i)
+                    temporal_reason = None
+                    if getattr(self.model, 'temporal_enabled', False) and temporal_ramp > 0.0:
                         temporal_candidate = self.model.get_temporal_consistency_loss(
-                            lambda_t=getattr(self.criterion, 'temporal_weight', 0.1),
+                            lambda_t=getattr(self.criterion, 'temporal_weight', 0.1) * temporal_ramp,
                             low_motion_bias=getattr(self.criterion, 'temporal_low_motion_bias', 0.75)
                         )
-                        if temporal_candidate is not None:
-                            temporal_loss = temporal_candidate
+                        temporal_loss, temporal_reason = self._stabilize_auxiliary_loss(
+                            name='temporal',
+                            loss_tensor=temporal_candidate,
+                            zero_term=zero_term,
+                            epoch=epoch,
+                            iteration_idx=i,
+                        )
 
+                    matched_pred_box = None
                     if pos_mask.any():
                         matched_pred_cls = pred_scores[pos_mask]
                         matched_pred_box = pred_bboxes[pos_mask]
@@ -381,24 +536,6 @@ class Trainer:
                         )
 
                     loss_total = loss_total_raw / self.accumulate
-                    if profile_iter:
-                        stage_times['loss_time'] = self._profile_stamp() - stage_start
-
-                if not torch.isfinite(loss_total):
-                    print("\nWarning: encountered non-finite loss, skipping batch.")
-                    self.optimizer.zero_grad()
-                    continue
-
-                should_debug_step = i < self.debug_loss_steps
-                should_log_zero_pos = self._should_log_zero_pos_debug(num_pos)
-                if profile_iter:
-                    stage_start = self._profile_stamp()
-                self.scaler.scale(loss_total).backward()
-                if profile_iter:
-                    stage_times['backward_time'] = self._profile_stamp() - stage_start
-
-                if should_debug_step or should_log_zero_pos:
-                    grad_debug = self._collect_grad_debug()
                     loss_components = {
                         'cls': float(loss_cls.detach().item()),
                         'box': float(loss_reg.detach().item()),
@@ -406,6 +543,57 @@ class Trainer:
                         'contrastive': float(contrastive_loss.detach().item()),
                         'temporal': float(temporal_loss.detach().item()),
                     }
+                    anomaly_reason = temporal_reason or self._detect_loss_anomaly(
+                        loss_components=loss_components,
+                        loss_total_raw=loss_total_raw,
+                        pred_scores=pred_scores,
+                        matched_pred_box=matched_pred_box,
+                    )
+                    if profile_iter:
+                        stage_times['loss_time'] = self._profile_stamp() - stage_start
+
+                should_debug_step = i < self.debug_loss_steps
+                should_log_zero_pos = self._should_log_zero_pos_debug(num_pos)
+                should_log_loss_anomaly = bool(anomaly_reason) and self._should_log_loss_anomaly()
+                debug_reason = "; ".join(
+                    item for item in (zero_pos_reason, anomaly_reason) if item
+                ) or None
+
+                if not torch.isfinite(loss_total):
+                    if should_debug_step or should_log_zero_pos or should_log_loss_anomaly:
+                        self._log_loss_debug(
+                            epoch=epoch,
+                            iteration_idx=i,
+                            batch_gt_count=batch_gt_count,
+                            per_image_gt_counts=per_image_gt_counts,
+                            num_pos=num_pos,
+                            flat_preds=flat_preds,
+                            pred_bboxes=pred_bboxes,
+                            pred_scores=pred_scores,
+                            target_scores=target_scores,
+                            gt_bboxes=gt_bboxes,
+                            mask_gt=mask_gt,
+                            anchor_points=anchor_points,
+                            matched_pred_box=matched_pred_box,
+                            loss_components=loss_components,
+                            loss_total_raw=loss_total_raw,
+                            loss_for_backward=loss_total,
+                            temporal_ramp=temporal_ramp,
+                            grad_debug=None,
+                            reason=debug_reason or 'non_finite_total_loss',
+                        )
+                    print("\nWarning: encountered non-finite loss, skipping batch.")
+                    self.optimizer.zero_grad()
+                    continue
+
+                if profile_iter:
+                    stage_start = self._profile_stamp()
+                self.scaler.scale(loss_total).backward()
+                if profile_iter:
+                    stage_times['backward_time'] = self._profile_stamp() - stage_start
+
+                if should_debug_step or should_log_zero_pos or should_log_loss_anomaly:
+                    grad_debug = self._collect_grad_debug()
                     self._log_loss_debug(
                         epoch=epoch,
                         iteration_idx=i,
@@ -415,14 +603,17 @@ class Trainer:
                         flat_preds=flat_preds,
                         pred_bboxes=pred_bboxes,
                         pred_scores=pred_scores,
+                        target_scores=target_scores,
                         gt_bboxes=gt_bboxes,
                         mask_gt=mask_gt,
                         anchor_points=anchor_points,
+                        matched_pred_box=matched_pred_box,
                         loss_components=loss_components,
                         loss_total_raw=loss_total_raw,
                         loss_for_backward=loss_total,
+                        temporal_ramp=temporal_ramp,
                         grad_debug=grad_debug,
-                        reason=zero_pos_reason,
+                        reason=debug_reason,
                     )
 
                 if profile_iter:

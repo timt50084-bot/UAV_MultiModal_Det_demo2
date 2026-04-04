@@ -52,6 +52,51 @@ class _DummyCriterion(torch.nn.Module):
         return loss_total, loss_cls, loss_reg, loss_angle
 
 
+class _DummyTemporalModel(_DummyModel):
+    def __init__(self, temporal_value=5.0):
+        super().__init__()
+        self.temporal_enabled = True
+        self.temporal_value = float(temporal_value)
+
+    def get_temporal_consistency_loss(self, lambda_t=0.1, low_motion_bias=0.75):
+        del low_motion_bias
+        return self.weight.new_tensor(self.temporal_value * float(lambda_t))
+
+
+class _RecordingTemporalCriterion(_DummyCriterion):
+    def __init__(self, warmup=0.0, ramp=0.0, max_loss=float('inf'), skip_loss=float('inf')):
+        super().__init__()
+        self.temporal_weight = 1.0
+        self.temporal_low_motion_bias = 0.75
+        self.temporal_warmup_epochs = float(warmup)
+        self.temporal_ramp_epochs = float(ramp)
+        self.temporal_max_loss = float(max_loss)
+        self.temporal_skip_loss_threshold = float(skip_loss)
+        self.seen_temporal_losses = []
+
+    def forward(
+        self,
+        matched_pred_cls,
+        matched_pred_box,
+        matched_tgt_cls,
+        matched_tgt_box,
+        contrastive_loss,
+        epoch,
+        temporal_loss=None,
+    ):
+        total_loss, loss_cls, loss_reg, loss_angle = super().forward(
+            matched_pred_cls,
+            matched_pred_box,
+            matched_tgt_cls,
+            matched_tgt_box,
+            contrastive_loss,
+            epoch,
+            temporal_loss=temporal_loss,
+        )
+        self.seen_temporal_losses.append(float(temporal_loss.detach().item()))
+        return total_loss, loss_cls, loss_reg, loss_angle
+
+
 class _DummyEvaluator:
     def __init__(self):
         self.calls = []
@@ -97,6 +142,74 @@ class TrainerEvalIntervalTestCase(unittest.TestCase):
         self.assertEqual(evaluator.calls, [2, 3])
         self.assertTrue(trainer.did_validate_this_epoch)
         self.assertAlmostEqual(float(trainer.current_metrics['mAP_50']), 0.2, places=6)
+
+    def test_trainer_clamps_temporal_loss_before_backward(self):
+        batch = (
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((0, 7), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+        )
+        train_loader = [batch]
+        model = _DummyTemporalModel(temporal_value=5.0)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
+        criterion = _RecordingTemporalCriterion(max_loss=0.2, skip_loss=10.0)
+
+        trainer = Trainer(
+            model=model,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            assigner=_DummyAssigner(),
+            device=torch.device('cpu'),
+            epochs=1,
+            accumulate=1,
+            grad_clip=1.0,
+            use_amp=False,
+            evaluator=None,
+            callbacks=[],
+        )
+        trainer.train()
+
+        self.assertEqual(len(criterion.seen_temporal_losses), 1)
+        self.assertAlmostEqual(criterion.seen_temporal_losses[0], 0.2, places=6)
+
+    def test_trainer_temporal_warmup_keeps_aux_loss_off(self):
+        batch = (
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((0, 7), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+            torch.zeros((1, 3, 16, 16), dtype=torch.float32),
+        )
+        train_loader = [batch]
+        model = _DummyTemporalModel(temporal_value=5.0)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
+        criterion = _RecordingTemporalCriterion(warmup=2.0)
+
+        trainer = Trainer(
+            model=model,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=criterion,
+            assigner=_DummyAssigner(),
+            device=torch.device('cpu'),
+            epochs=1,
+            accumulate=1,
+            grad_clip=1.0,
+            use_amp=False,
+            evaluator=None,
+            callbacks=[],
+        )
+        trainer.train()
+
+        self.assertEqual(len(criterion.seen_temporal_losses), 1)
+        self.assertAlmostEqual(criterion.seen_temporal_losses[0], 0.0, places=6)
 
 
 if __name__ == '__main__':

@@ -105,6 +105,27 @@ class TemporalMemoryTestCase(unittest.TestCase):
         self.assertEqual(model.temporal_mode, "two_frame")
         self.assertIsNotNone(model.temporal_fpn)
 
+    def test_two_frame_skips_consistency_without_reference_frame(self):
+        model = build_model({
+            "type": "YOLODualModalOBB",
+            "num_classes": 1,
+            "channels": [32, 64, 128, 256],
+            "fusion": {"type": "SimpleConcatFusion"},
+            "temporal": {
+                "enabled": True,
+                "mode": "two_frame",
+            },
+        })
+        rgb = torch.randn(1, 3, 64, 64)
+        ir = torch.randn(1, 3, 64, 64)
+
+        outputs, _, _ = model(rgb, ir)
+
+        self.assertEqual(len(outputs), 4)
+        self.assertFalse(model.last_temporal_state["reference_valid"])
+        self.assertIsNone(model.last_temporal_state["reference_feats"])
+        self.assertIsNone(model.get_temporal_consistency_loss())
+
     def test_legacy_fusion_att_type_still_builds(self):
         # Keep one explicit compatibility test for the deprecated fusion entry.
         model = build_model({
