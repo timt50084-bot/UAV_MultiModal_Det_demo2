@@ -7,8 +7,11 @@ experiment:
   enable_unified_dirs: True
 
 performance:
+  # Stable-first temporal training entry. Keep worker lifetime deterministic and
+  # use bounded fetch waits so worker stalls fail fast instead of hanging silently.
   dataloader:
     persistent_workers: False
+    prefetch_factor: 1
     timeout_seconds: 120
   temporal_debug:
     enabled: False

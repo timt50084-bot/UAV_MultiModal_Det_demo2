@@ -3,6 +3,7 @@ from importlib import import_module
 from pathlib import Path
 import random
 import time
+import warnings
 
 import cv2
 import numpy as np
@@ -20,6 +21,9 @@ except ImportError:  # pragma: no cover
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+TEMPORAL_DATALOADER_TIMEOUT_SECONDS = 120
+TEMPORAL_DATALOADER_PREFETCH_FACTOR = 1
+TEMPORAL_DATALOADER_WARN_WORKERS = 4
 
 
 def _ensure_data_modules_registered():
@@ -52,6 +56,25 @@ def _clone_dataloader_cfg(cfg):
     if hasattr(dataloader_cfg, 'items'):
         return dict(dataloader_cfg.items())
     return {}
+
+
+def _normalize_optional_cfg_dict(cfg_section):
+    if isinstance(cfg_section, dict):
+        return deepcopy(cfg_section)
+    if hasattr(cfg_section, 'items'):
+        return dict(cfg_section.items())
+    return {}
+
+
+def _has_explicit_cfg_value(cfg_dict, key):
+    return key in cfg_dict and cfg_dict.get(key) not in (None, '')
+
+
+def _coerce_non_negative_int(value, default=0):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(default))
 
 
 def _resolve_dataset_root_dir(root_dir):
@@ -187,7 +210,9 @@ def build_dataloader(cfg, is_training=True):
     dataloader_cfg = _clone_dataloader_cfg(cfg)
     performance_cfg = _clone_performance_cfg(cfg)
     dataloader_perf_cfg = performance_cfg.get('dataloader', {}) if isinstance(performance_cfg, dict) else {}
+    dataloader_perf_cfg = _normalize_optional_cfg_dict(dataloader_perf_cfg)
     temporal_debug_cfg = _normalize_temporal_debug_cfg(performance_cfg)
+    num_workers = _coerce_non_negative_int(dataloader_cfg.get('num_workers', 0))
     if 'root_dir' in dataset_cfg:
         dataset_cfg['root_dir'] = _resolve_dataset_root_dir(dataset_cfg.get('root_dir'))
     dataset_cfg['split'] = 'train' if is_training else 'val'
@@ -202,7 +227,7 @@ def build_dataloader(cfg, is_training=True):
     )
     dataset_cfg['temporal_debug'] = dict(
         temporal_debug_cfg,
-        num_workers=max(0, int(dataloader_cfg.get('num_workers', 0))),
+        num_workers=num_workers,
     )
     dataset = DATASETS.build(dataset_cfg)
     temporal_training = bool(is_training and dataset_cfg.get('use_temporal', False))
@@ -220,7 +245,15 @@ def build_dataloader(cfg, is_training=True):
         shuffle = False
 
     dataloader_kwargs = {}
-    if int(dataloader_cfg.get('num_workers', 0)) > 0:
+    if num_workers > 0:
+        if temporal_training and num_workers > TEMPORAL_DATALOADER_WARN_WORKERS:
+            warnings.warn(
+                f"Temporal training is using num_workers={num_workers}. "
+                f"Values above {TEMPORAL_DATALOADER_WARN_WORKERS} can make worker stalls harder to recover from; "
+                "prefer smaller worker counts when debugging throughput or stability issues.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         persistent_workers = bool(dataloader_perf_cfg.get('persistent_workers', True))
         if temporal_training and persistent_workers and not bool(temporal_cfg.get('allow_persistent_workers', False)):
             persistent_workers = False
@@ -230,9 +263,14 @@ def build_dataloader(cfg, is_training=True):
             )
         dataloader_kwargs['persistent_workers'] = persistent_workers
         prefetch_factor = dataloader_perf_cfg.get('prefetch_factor', None)
+        if temporal_training and not _has_explicit_cfg_value(dataloader_perf_cfg, 'prefetch_factor'):
+            prefetch_factor = TEMPORAL_DATALOADER_PREFETCH_FACTOR
         if prefetch_factor is not None:
-            dataloader_kwargs['prefetch_factor'] = max(1, int(prefetch_factor))
-        timeout_seconds = max(0, int(dataloader_perf_cfg.get('timeout_seconds', 0) or 0))
+            dataloader_kwargs['prefetch_factor'] = max(1, _coerce_non_negative_int(prefetch_factor, default=1))
+        timeout_seconds = dataloader_perf_cfg.get('timeout_seconds', 0)
+        if temporal_training and not _has_explicit_cfg_value(dataloader_perf_cfg, 'timeout_seconds'):
+            timeout_seconds = TEMPORAL_DATALOADER_TIMEOUT_SECONDS
+        timeout_seconds = _coerce_non_negative_int(timeout_seconds, default=0)
         if timeout_seconds > 0:
             dataloader_kwargs['timeout'] = timeout_seconds
         dataloader_kwargs['worker_init_fn'] = _dataloader_worker_init_fn
@@ -242,7 +280,7 @@ def build_dataloader(cfg, is_training=True):
         batch_size=dataloader_cfg.get('batch_size', 1),
         shuffle=shuffle,
         sampler=sampler,
-        num_workers=dataloader_cfg.get('num_workers', 0),
+        num_workers=num_workers,
         collate_fn=build_collate_fn(temporal_debug_cfg if temporal_training else None),
         pin_memory=bool(dataloader_cfg.get('pin_memory', True)),
         drop_last=is_training,

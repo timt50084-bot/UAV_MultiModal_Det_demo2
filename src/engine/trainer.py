@@ -445,6 +445,21 @@ class Trainer:
             f"elapsed_ms={elapsed_ms:.1f} num_workers={getattr(self.train_loader, 'num_workers', 0)}"
         )
 
+    def _raise_dataloader_failure(self, exc, epoch, iteration_idx, num_batches):
+        temporal_enabled = bool(getattr(self.model, 'temporal_enabled', False))
+        temporal_mode = getattr(self.model, 'temporal_mode', 'off')
+        num_workers = int(getattr(self.train_loader, 'num_workers', 0) or 0)
+        timeout_seconds = int(getattr(self.train_loader, 'timeout', 0) or 0)
+        raise RuntimeError(
+            "Training dataloader failed while fetching the next batch. "
+            f"epoch={epoch + 1} batch={iteration_idx + 1}/{num_batches} "
+            f"num_workers={num_workers} timeout_seconds={timeout_seconds} "
+            f"temporal_enabled={temporal_enabled} temporal_mode={temporal_mode}. "
+            "This usually indicates a dataloader worker timeout/stall or worker crash. "
+            "Temporary mitigation: set num_workers=0 and timeout_seconds=120. "
+            f"Original exception: {exc.__class__.__name__}: {exc}"
+        ) from exc
+
     def format_targets(self, targets, batch_size):
         if targets.numel() == 0:
             gt_labels = torch.zeros((batch_size, 0, 1), device=self.device)
@@ -508,9 +523,12 @@ class Trainer:
                 except StopIteration:
                     break
                 except Exception as exc:
-                    raise RuntimeError(
-                        f"Training dataloader failed at epoch {epoch + 1}, batch {i + 1}/{num_batches}."
-                    ) from exc
+                    self._raise_dataloader_failure(
+                        exc=exc,
+                        epoch=epoch,
+                        iteration_idx=i,
+                        num_batches=num_batches,
+                    )
                 self._maybe_log_batch_wait(
                     epoch=epoch,
                     iteration_idx=i,

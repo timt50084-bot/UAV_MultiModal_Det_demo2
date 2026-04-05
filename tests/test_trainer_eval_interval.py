@@ -56,6 +56,7 @@ class _DummyTemporalModel(_DummyModel):
     def __init__(self, temporal_value=5.0):
         super().__init__()
         self.temporal_enabled = True
+        self.temporal_mode = 'two_frame'
         self.temporal_value = float(temporal_value)
 
     def get_temporal_consistency_loss(self, lambda_t=0.1, low_motion_bias=0.75):
@@ -104,6 +105,23 @@ class _DummyEvaluator:
     def evaluate(self, model, epoch=-1):
         self.calls.append(epoch)
         return {'mAP_50': 0.1 * len(self.calls)}
+
+
+class _FailingLoader:
+    def __init__(self, exc):
+        self.exc = exc
+        self.num_workers = 8
+        self.timeout = 120
+        self.dataset = object()
+
+    def __len__(self):
+        return 1
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise self.exc
 
 
 class TrainerEvalIntervalTestCase(unittest.TestCase):
@@ -210,6 +228,41 @@ class TrainerEvalIntervalTestCase(unittest.TestCase):
 
         self.assertEqual(len(criterion.seen_temporal_losses), 1)
         self.assertAlmostEqual(criterion.seen_temporal_losses[0], 0.0, places=6)
+
+    def test_trainer_raises_contextual_error_on_dataloader_failure(self):
+        model = _DummyTemporalModel(temporal_value=1.0)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda _: 1.0)
+        train_loader = _FailingLoader(RuntimeError("DataLoader worker (pid(s) 123) exited unexpectedly"))
+
+        trainer = Trainer(
+            model=model,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            criterion=_DummyCriterion(),
+            assigner=_DummyAssigner(),
+            device=torch.device('cpu'),
+            epochs=1,
+            accumulate=1,
+            grad_clip=1.0,
+            use_amp=False,
+            evaluator=None,
+            callbacks=[],
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            trainer.train()
+
+        message = str(raised.exception)
+        self.assertIn('epoch=1', message)
+        self.assertIn('batch=1/1', message)
+        self.assertIn('num_workers=8', message)
+        self.assertIn('temporal_enabled=True', message)
+        self.assertIn('temporal_mode=two_frame', message)
+        self.assertIn('num_workers=0', message)
+        self.assertIn('timeout_seconds=120', message)
+        self.assertIn('DataLoader worker (pid(s) 123) exited unexpectedly', message)
 
 
 if __name__ == '__main__':

@@ -136,22 +136,57 @@ class DroneDualDataset(BaseDataset):
             'mrre_max_labels': self.temporal_mrre_max_labels,
         }
 
+    def _validate_image_or_raise(self, image, image_path, idx, prev_idx, rgb_path, prev_rgb_path, role):
+        if image is None:
+            raise RuntimeError(
+                f"[TemporalData] failed to read {role} image: {image_path} "
+                f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+            )
+        if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[0] <= 0 or image.shape[1] <= 0:
+            raise RuntimeError(
+                f"[TemporalData] invalid {role} image payload: {image_path} shape={getattr(image, 'shape', None)} "
+                f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+            )
+        return image
+
     def _read_image_or_raise(self, image_path, idx, prev_idx, rgb_path, prev_rgb_path, role):
+        if not image_path.exists():
+            raise RuntimeError(
+                f"[TemporalData] missing {role} image: {image_path} "
+                f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+            )
         image = cv2.imread(str(image_path))
-        if image is not None:
-            return image
-        raise RuntimeError(
-            f"[TemporalData] failed to read {role} image: {image_path} "
-            f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+        return self._validate_image_or_raise(
+            image,
+            image_path=image_path,
+            idx=idx,
+            prev_idx=prev_idx,
+            rgb_path=rgb_path,
+            prev_rgb_path=prev_rgb_path,
+            role=role,
         )
 
     def _read_prev_image_with_fallback(self, image_path, fallback_image, idx, prev_idx, rgb_path, prev_rgb_path, role):
-        image = cv2.imread(str(image_path))
+        if not image_path.exists():
+            image = None
+        else:
+            image = cv2.imread(str(image_path))
         if image is not None:
-            return image
+            try:
+                return self._validate_image_or_raise(
+                    image,
+                    image_path=image_path,
+                    idx=idx,
+                    prev_idx=prev_idx,
+                    rgb_path=rgb_path,
+                    prev_rgb_path=prev_rgb_path,
+                    role=role,
+                )
+            except RuntimeError:
+                image = None
         if self._prev_fallback_warning_count < self._prev_fallback_warning_limit:
             print(
-                f"[TemporalData] prev-frame fallback role={role} missing={image_path} "
+                f"[TemporalData] prev-frame fallback role={role} unavailable={image_path} "
                 f"using_current_frame ({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
             )
             self._prev_fallback_warning_count += 1
@@ -160,16 +195,37 @@ class DroneDualDataset(BaseDataset):
     def _load_labels(self, label_path, idx, prev_idx, rgb_path, prev_rgb_path):
         labels = []
         if not label_path.exists():
-            return np.array(labels, dtype=np.float32)
+            return np.zeros((0, 6), dtype=np.float32)
         try:
             with open(label_path, 'r') as handle:
-                labels = [[float(x) for x in line.strip().split()] for line in handle.readlines()]
+                for line_number, line in enumerate(handle, start=1):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    parts = stripped.split()
+                    if len(parts) != 6:
+                        raise RuntimeError(
+                            f"[TemporalData] invalid label format: {label_path} line={line_number} "
+                            f"expected 6 values got {len(parts)} "
+                            f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+                        )
+                    row = np.array([float(x) for x in parts], dtype=np.float32)
+                    if not np.isfinite(row).all():
+                        raise RuntimeError(
+                            f"[TemporalData] non-finite label values: {label_path} line={line_number} "
+                            f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+                        )
+                    labels.append(row)
+        except RuntimeError:
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"[TemporalData] failed to parse labels: {label_path} "
                 f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
             ) from exc
-        return np.array(labels, dtype=np.float32)
+        if not labels:
+            return np.zeros((0, 6), dtype=np.float32)
+        return np.stack(labels, axis=0).astype(np.float32, copy=False)
 
     def _maybe_log_sample(self, idx, prev_idx, rgb_path, prev_rgb_path, label_count, elapsed_ms, stage_timings):
         if not self.temporal_debug_enabled:
@@ -288,17 +344,24 @@ class DroneDualDataset(BaseDataset):
 
         if len(labels) > 0:
             def _scale_labels():
-                labels[:, 1] = (labels[:, 1] * w_old * r + dw) / self.img_size
-                labels[:, 2] = (labels[:, 2] * h_old * r + dh) / self.img_size
-                labels[:, 3] = (labels[:, 3] * w_old * r) / self.img_size
-                labels[:, 4] = (labels[:, 4] * h_old * r) / self.img_size
-                return labels
+                scaled_labels = labels.copy()
+                scaled_labels[:, 1] = (scaled_labels[:, 1] * w_old * r + dw) / self.img_size
+                scaled_labels[:, 2] = (scaled_labels[:, 2] * h_old * r + dh) / self.img_size
+                scaled_labels[:, 3] = (scaled_labels[:, 3] * w_old * r) / self.img_size
+                scaled_labels[:, 4] = (scaled_labels[:, 4] * h_old * r) / self.img_size
+                if not np.isfinite(scaled_labels).all():
+                    raise RuntimeError(
+                        f"[TemporalData] non-finite labels after scaling: {label_path} "
+                        f"({self._format_sample_debug(idx, prev_idx, rgb_path, prev_rgb_path)})"
+                    )
+                return scaled_labels
 
             labels = self._run_sample_stage(
                 'scale_labels',
                 sample_debug,
                 stage_timings,
                 _scale_labels,
+                extra=f"path={label_path}",
             )
 
         if self.is_training and self.aug_pipeline is not None:

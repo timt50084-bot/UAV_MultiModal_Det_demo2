@@ -323,17 +323,97 @@ class MultiModalAugmentationPipeline:
             )
         return result
 
+    @staticmethod
+    def _normalize_label_row(label):
+        try:
+            label_array = np.asarray(label, dtype=np.float32).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if label_array.size < 6:
+            return None
+        label_array = label_array[:6]
+        if not np.isfinite(label_array).all():
+            return None
+        return label_array
+
+    @classmethod
+    def _extract_valid_label_rows(cls, labels):
+        valid_rows = []
+        for label in labels:
+            normalized = cls._normalize_label_row(label)
+            if normalized is not None:
+                valid_rows.append(normalized)
+        return valid_rows
+
+    @classmethod
+    def _resolve_box_geometry(cls, label, width, height):
+        normalized = cls._normalize_label_row(label)
+        if normalized is None or width <= 0 or height <= 0:
+            return None
+
+        cls_id, cx, cy, w, h, theta = normalized.tolist()
+        if not (0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and 0.0 < w <= 1.0 and 0.0 < h <= 1.0):
+            return None
+
+        abs_w = int(round(w * width))
+        abs_h = int(round(h * height))
+        if abs_w <= 0 or abs_h <= 0 or abs_w > width or abs_h > height:
+            return None
+
+        center_x = float(cx * width)
+        center_y = float(cy * height)
+        if not np.isfinite([center_x, center_y]).all():
+            return None
+
+        x1 = int(round(center_x - abs_w / 2.0))
+        y1 = int(round(center_y - abs_h / 2.0))
+        x2 = x1 + abs_w
+        y2 = y1 + abs_h
+        if x1 < 0 or y1 < 0 or x2 > width or y2 > height:
+            return None
+
+        return {
+            'cls_id': cls_id,
+            'cx': cx,
+            'cy': cy,
+            'w': w,
+            'h': h,
+            'theta': theta,
+            'center_x': center_x,
+            'center_y': center_y,
+            'abs_w': abs_w,
+            'abs_h': abs_h,
+            'x1': x1,
+            'y1': y1,
+            'x2': x2,
+            'y2': y2,
+        }
+
     def check_iou_conflict(self, px, py, pw, ph, existing_labels, width, height, iou_thresh=0.1):
+        if (
+            width <= 0 or height <= 0 or pw <= 0 or ph <= 0
+            or not np.isfinite([px, py, pw, ph]).all()
+            or (px - pw / 2.0) < 0 or (py - ph / 2.0) < 0
+            or (px + pw / 2.0) > width or (py + ph / 2.0) > height
+        ):
+            return True
         box1 = [px - pw / 2, py - ph / 2, px + pw / 2, py + ph / 2]
         for lbl in existing_labels:
-            _, cx, cy, w, h, _ = lbl
-            box2 = [cx * width - w * width / 2, cy * height - h * height / 2,
-                    cx * width + w * width / 2, cy * height + h * height / 2]
+            box_info = self._resolve_box_geometry(lbl, width, height)
+            if box_info is None:
+                continue
+            box2 = [
+                box_info['center_x'] - box_info['abs_w'] / 2.0,
+                box_info['center_y'] - box_info['abs_h'] / 2.0,
+                box_info['center_x'] + box_info['abs_w'] / 2.0,
+                box_info['center_y'] + box_info['abs_h'] / 2.0,
+            ]
             ix1, iy1 = max(box1[0], box2[0]), max(box1[1], box2[1])
             ix2, iy2 = min(box1[2], box2[2]), min(box1[3], box2[3])
             if ix1 < ix2 and iy1 < iy2:
                 inter_area = (ix2 - ix1) * (iy2 - iy1)
-                iou = inter_area / float(pw * ph + (w * width) * (h * height) - inter_area + 1e-6)
+                existing_area = float(box_info['abs_w'] * box_info['abs_h'])
+                iou = inter_area / float(pw * ph + existing_area - inter_area + 1e-6)
                 if iou > iou_thresh:
                     return True
         return False
@@ -342,7 +422,12 @@ class MultiModalAugmentationPipeline:
         if len(labels) == 0:
             return labels, img_rgb, img_ir
         height, width = img_rgb.shape[:2]
-        new_labels = list(labels)
+        if height <= 0 or width <= 0:
+            return np.zeros((0, 6), dtype=np.float32), img_rgb, img_ir
+        valid_labels = self._extract_valid_label_rows(labels)
+        if not valid_labels:
+            return np.zeros((0, 6), dtype=np.float32), img_rgb, img_ir
+        new_labels = [label.tolist() for label in valid_labels]
         cmcp_start = time.perf_counter()
         max_elapsed_ms = (
             float(debug_context.get('cmcp_max_elapsed_ms', 0.0))
@@ -356,31 +441,46 @@ class MultiModalAugmentationPipeline:
         copied_small_objects = 0
         stop_reason = None
 
-        for lbl in labels:
+        for lbl in valid_labels:
             if max_elapsed_ms > 0.0 and ((time.perf_counter() - cmcp_start) * 1000.0) >= max_elapsed_ms:
                 stop_reason = f"budget_exceeded>{max_elapsed_ms:.1f}ms"
                 break
-            cls_id, cx, cy, w, h, theta = lbl
+            box_info = self._resolve_box_geometry(lbl, width, height)
+            if box_info is None:
+                continue
+            cls_id = box_info['cls_id']
+            w, h = box_info['w'], box_info['h']
+            theta = box_info['theta']
             if w < 0.05 and h < 0.05:
                 processed_small_objects += 1
                 if max_small_objects > 0 and processed_small_objects > max_small_objects:
                     stop_reason = f"small_object_limit>{max_small_objects}"
                     break
-                abs_w, abs_h = int(w * width), int(h * height)
-                x1, y1 = max(0, int(cx * width) - abs_w // 2), max(0, int(cy * height) - abs_h // 2)
-                x2, y2 = min(width, x1 + abs_w), min(height, y1 + abs_h)
-
-                if x2 <= x1 or y2 <= y1:
+                x1, y1 = box_info['x1'], box_info['y1']
+                x2, y2 = box_info['x2'], box_info['y2']
+                patch_w = x2 - x1
+                patch_h = y2 - y1
+                if patch_w <= 0 or patch_h <= 0:
                     continue
                 patch_rgb, patch_ir = img_rgb[y1:y2, x1:x2].copy(), img_ir[y1:y2, x1:x2].copy()
+                if (
+                    patch_rgb.shape[0] != patch_h or patch_rgb.shape[1] != patch_w
+                    or patch_ir.shape[0] != patch_h or patch_ir.shape[1] != patch_w
+                ):
+                    continue
+                max_paste_x = width - patch_w
+                max_paste_y = height - patch_h
+                if max_paste_x < 0 or max_paste_y < 0:
+                    continue
 
                 for _ in range(10):
                     if max_elapsed_ms > 0.0 and ((time.perf_counter() - cmcp_start) * 1000.0) >= max_elapsed_ms:
                         stop_reason = f"budget_exceeded>{max_elapsed_ms:.1f}ms"
                         break
-                    paste_x, paste_y = random.randint(0, width - abs_w), random.randint(0, height - abs_h)
-                    paste_cx, paste_cy = paste_x + abs_w / 2, paste_y + abs_h / 2
-                    if not self.check_iou_conflict(paste_cx, paste_cy, abs_w, abs_h, new_labels, width, height):
+                    paste_x = random.randint(0, max_paste_x)
+                    paste_y = random.randint(0, max_paste_y)
+                    paste_cx, paste_cy = paste_x + patch_w / 2.0, paste_y + patch_h / 2.0
+                    if not self.check_iou_conflict(paste_cx, paste_cy, patch_w, patch_h, new_labels, width, height):
                         img_rgb[paste_y:paste_y + patch_rgb.shape[0], paste_x:paste_x + patch_rgb.shape[1]] = patch_rgb
                         img_ir[paste_y:paste_y + patch_ir.shape[0], paste_x:paste_x + patch_ir.shape[1]] = patch_ir
                         new_labels.append([cls_id, paste_cx / width, paste_cy / height, w, h, theta])
@@ -401,6 +501,11 @@ class MultiModalAugmentationPipeline:
         if len(labels) == 0:
             return img_rgb, img_ir
         height, width = img_rgb.shape[:2]
+        if height <= 0 or width <= 0:
+            return img_rgb, img_ir
+        valid_labels = self._extract_valid_label_rows(labels)
+        if not valid_labels:
+            return img_rgb, img_ir
         mrre_start = time.perf_counter()
         max_elapsed_ms = (
             float(debug_context.get('mrre_max_elapsed_ms', 0.0))
@@ -413,7 +518,7 @@ class MultiModalAugmentationPipeline:
         processed_labels = 0
         stop_reason = None
 
-        for lbl in labels:
+        for lbl in valid_labels:
             if max_labels > 0 and processed_labels >= max_labels:
                 stop_reason = f"label_limit>{max_labels}"
                 break
@@ -423,15 +528,31 @@ class MultiModalAugmentationPipeline:
             processed_labels += 1
             if random.random() > 0.5:
                 continue
-            _, cx, cy, w, h, _ = lbl
-            abs_w, abs_h = int(w * width), int(h * height)
-            bg_x, bg_y = random.randint(0, width - abs_w // 2), random.randint(0, height - abs_h // 2)
-            bg_patch_rgb = img_rgb[bg_y:bg_y + abs_h // 2, bg_x:bg_x + abs_w // 2].copy()
-            bg_patch_ir = img_ir[bg_y:bg_y + abs_h // 2, bg_x:bg_x + abs_w // 2].copy()
-            tgt_x, tgt_y = int(cx * width) - abs_w // 4, int(cy * height) - abs_h // 4
-            if 0 <= tgt_x < width - abs_w // 2 and 0 <= tgt_y < height - abs_h // 2:
-                img_rgb[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_rgb
-                img_ir[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_ir
+            box_info = self._resolve_box_geometry(lbl, width, height)
+            if box_info is None:
+                continue
+            patch_w = box_info['abs_w'] // 2
+            patch_h = box_info['abs_h'] // 2
+            if patch_w <= 0 or patch_h <= 0:
+                continue
+            max_bg_x = width - patch_w
+            max_bg_y = height - patch_h
+            if max_bg_x < 0 or max_bg_y < 0:
+                continue
+            bg_x = random.randint(0, max_bg_x)
+            bg_y = random.randint(0, max_bg_y)
+            bg_patch_rgb = img_rgb[bg_y:bg_y + patch_h, bg_x:bg_x + patch_w].copy()
+            bg_patch_ir = img_ir[bg_y:bg_y + patch_h, bg_x:bg_x + patch_w].copy()
+            if (
+                bg_patch_rgb.shape[0] != patch_h or bg_patch_rgb.shape[1] != patch_w
+                or bg_patch_ir.shape[0] != patch_h or bg_patch_ir.shape[1] != patch_w
+            ):
+                continue
+            tgt_x = int(round(box_info['center_x'] - patch_w / 2.0))
+            tgt_y = int(round(box_info['center_y'] - patch_h / 2.0))
+            if 0 <= tgt_x <= width - patch_w and 0 <= tgt_y <= height - patch_h:
+                img_rgb[tgt_y:tgt_y + patch_h, tgt_x:tgt_x + patch_w] = bg_patch_rgb
+                img_ir[tgt_y:tgt_y + patch_h, tgt_x:tgt_x + patch_w] = bg_patch_ir
         if stop_reason:
             self._log_temporal_debug(
                 debug_context,

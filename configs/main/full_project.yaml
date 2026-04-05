@@ -37,12 +37,16 @@ performance:
   profile_cuda: True
   log_interval: 10
   dataloader:
+    # full_project keeps the faster explicit prefetch setting, but temporal is on
+    # by default here, so still bound worker fetch waits to avoid silent hangs.
     persistent_workers: True
     prefetch_factor: 2
+    timeout_seconds: 120
 
 model:
   # Final mainline: use the explicit fusion block below as the single active fusion entry.
   # The legacy fusion_att_type route is intentionally disabled here to avoid ambiguity.
+  # For stability-first temporal training, prefer configs/main/temporal_main.yaml.
   fusion_att_type: null
   use_contrastive: False
   fusion:

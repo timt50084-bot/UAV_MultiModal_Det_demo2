@@ -135,6 +135,39 @@ class RealisticMultimodalAugTestCase(unittest.TestCase):
         self.assertEqual(out_ir.shape, self.ir.shape)
         self.assertEqual(out_prev_ir.shape, self.ir.shape)
 
+    def test_temporal_aug_skips_invalid_boxes_without_exception(self):
+        pipeline = MultiModalAugmentationPipeline(
+            enable_cmcp=True,
+            enable_mrre=True,
+            enable_weather=False,
+            enable_modality_dropout=False,
+        )
+        invalid_labels = np.array([
+            [0, 0.5, 0.5, 0.0, 0.2, 0.0],
+            [0, 1.2, 0.5, 0.2, 0.2, 0.0],
+            [0, 0.5, -0.1, 0.2, 0.2, 0.0],
+            [0, 0.5, 0.5, -0.2, 0.2, 0.0],
+            [0, 0.5, 0.5, 0.9, 1.5, 0.0],
+            [0, np.nan, 0.5, 0.1, 0.1, 0.0],
+        ], dtype=np.float32)
+
+        out_labels, out_rgb, out_ir = pipeline.apply_cmcp(
+            invalid_labels.copy(),
+            self.rgb.copy(),
+            self.ir.copy(),
+        )
+        out_rgb_mrre, out_ir_mrre = pipeline.apply_mrre(
+            invalid_labels.copy(),
+            self.rgb.copy(),
+            self.ir.copy(),
+        )
+
+        self.assertEqual(out_rgb.shape, self.rgb.shape)
+        self.assertEqual(out_ir.shape, self.ir.shape)
+        self.assertEqual(out_rgb_mrre.shape, self.rgb.shape)
+        self.assertEqual(out_ir_mrre.shape, self.ir.shape)
+        self.assertEqual(out_labels.shape[1], 6)
+
 
 if __name__ == '__main__':
     unittest.main()

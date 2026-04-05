@@ -95,6 +95,16 @@ class TemporalDataloaderSmokeTestCase(unittest.TestCase):
 
         self.assertEqual(observed_batches, expected_batches_per_epoch * 3)
 
+    def test_temporal_loader_applies_safe_defaults_when_not_explicitly_configured(self):
+        cfg = OmegaConf.create(OmegaConf.to_container(self.cfg, resolve=True))
+        cfg.performance.dataloader = {}
+
+        train_loader, _ = build_dataloader(cfg, is_training=True)
+
+        self.assertFalse(train_loader.persistent_workers)
+        self.assertEqual(train_loader.timeout, 120)
+        self.assertEqual(train_loader.prefetch_factor, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

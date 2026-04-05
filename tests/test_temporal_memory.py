@@ -174,10 +174,48 @@ class TemporalMemoryTestCase(unittest.TestCase):
 
         self.assertTrue(state["reference_valid"])
         self.assertTrue(any(feat.requires_grad for feat in state["current_feats_after_temporal"]))
+        self.assertTrue(all(not feat.requires_grad for feat in state["current_feats_before_temporal"]))
+        self.assertTrue(all(feat.grad_fn is None for feat in state["current_feats_before_temporal"]))
         self.assertTrue(all(not feat.requires_grad for feat in state["reference_feats"]))
         self.assertTrue(all(feat.grad_fn is None for feat in state["reference_feats"]))
         self.assertTrue(all(not value.requires_grad for value in state["temporal_maps"].values()))
         self.assertTrue(all(value.grad_fn is None for value in state["temporal_maps"].values()))
+
+    def test_two_frame_reference_inputs_do_not_receive_gradients(self):
+        model = build_model({
+            "type": "YOLODualModalOBB",
+            "num_classes": 1,
+            "channels": [32, 64, 128, 256],
+            "fusion": {"type": "SimpleConcatFusion"},
+            "temporal": {
+                "enabled": True,
+                "mode": "two_frame",
+            },
+        })
+        model.train()
+        rgb = torch.randn(1, 3, 64, 64, requires_grad=True)
+        ir = torch.randn(1, 3, 64, 64, requires_grad=True)
+        prev_rgb = torch.randn(1, 3, 64, 64, requires_grad=True)
+        prev_ir = torch.randn(1, 3, 64, 64, requires_grad=True)
+
+        outputs, _, _ = model(rgb, ir, prev_rgb=prev_rgb, prev_ir=prev_ir)
+        temporal_loss = model.get_temporal_consistency_loss(lambda_t=0.5)
+        output_tensors = []
+        if isinstance(outputs, dict):
+            output_tensors.extend(outputs.values())
+        else:
+            for output in outputs:
+                if isinstance(output, dict):
+                    output_tensors.extend(output.values())
+                else:
+                    output_tensors.append(output)
+        loss = sum(output.sum() for output in output_tensors) + temporal_loss
+        loss.backward()
+
+        self.assertIsNotNone(rgb.grad)
+        self.assertIsNotNone(ir.grad)
+        self.assertIsNone(prev_rgb.grad)
+        self.assertIsNone(prev_ir.grad)
 
     def test_legacy_fusion_att_type_still_builds(self):
         # Keep one explicit compatibility test for the deprecated fusion entry.

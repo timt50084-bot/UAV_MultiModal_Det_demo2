@@ -55,6 +55,7 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(cfg.loss.temporal_warmup_epochs), 2.0, places=6)
         self.assertAlmostEqual(float(cfg.loss.temporal_max_loss), 0.2, places=6)
         self.assertFalse(bool(cfg.performance.dataloader.persistent_workers))
+        self.assertEqual(int(cfg.performance.dataloader.prefetch_factor), 1)
         self.assertEqual(int(cfg.performance.dataloader.timeout_seconds), 120)
 
     def test_full_project_config_loads(self):
@@ -70,6 +71,7 @@ class ExperimentConfigSmokeTestCase(unittest.TestCase):
         self.assertAlmostEqual(float(cfg.train.lr), 0.0003, places=7)
         self.assertFalse(bool(cfg.train.use_amp))
         self.assertEqual(cfg.model.temporal.mode, 'two_frame')
+        self.assertEqual(int(cfg.performance.dataloader.timeout_seconds), 120)
         self.assertAlmostEqual(float(cfg.loss.temporal_warmup_epochs), 2.0, places=6)
         self.assertAlmostEqual(float(cfg.loss.temporal_max_loss), 0.2, places=6)
         self.assertTrue(cfg.assigner.use_angle_aware_assign)
