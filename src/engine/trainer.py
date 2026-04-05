@@ -97,6 +97,8 @@ class Trainer:
             temporal_debug_cfg = {}
         self.temporal_debug_enabled = bool(temporal_debug_cfg.get('enabled', False))
         self.temporal_log_epoch_reset = bool(temporal_debug_cfg.get('log_epoch_reset', True))
+        self.temporal_trace_batch_wait = bool(temporal_debug_cfg.get('trace_batch_wait', False))
+        self.temporal_dataloader_wait_ms = float(temporal_debug_cfg.get('dataloader_wait_ms', 1000.0))
 
         self.evaluator = evaluator
         self.callbacks = callbacks or []
@@ -426,6 +428,23 @@ class Trainer:
             f"has_step_state={state.get('has_step_state', False)}"
         )
 
+    def _should_trace_batch_wait_start(self):
+        if not (self.temporal_debug_enabled and getattr(self.model, 'temporal_enabled', False)):
+            return False
+        if self.temporal_trace_batch_wait:
+            return True
+        return max(0, int(getattr(self.train_loader, 'num_workers', 0))) == 0
+
+    def _maybe_log_batch_wait(self, epoch, iteration_idx, num_batches, elapsed_ms):
+        if not (self.temporal_debug_enabled and getattr(self.model, 'temporal_enabled', False)):
+            return
+        if elapsed_ms < self.temporal_dataloader_wait_ms:
+            return
+        print(
+            f"[TemporalData][BatchFetch] epoch={epoch + 1} batch={iteration_idx + 1}/{num_batches} "
+            f"elapsed_ms={elapsed_ms:.1f} num_workers={getattr(self.train_loader, 'num_workers', 0)}"
+        )
+
     def format_targets(self, targets, batch_size):
         if targets.numel() == 0:
             gt_labels = torch.zeros((batch_size, 0, 1), device=self.device)
@@ -478,6 +497,12 @@ class Trainer:
             last_iter_end = time.perf_counter()
 
             for i in range(num_batches):
+                batch_fetch_start = time.perf_counter()
+                if self._should_trace_batch_wait_start():
+                    print(
+                        f"[TemporalData][BatchFetch] epoch={epoch + 1} batch={i + 1}/{num_batches} "
+                        f"waiting_for_next_batch num_workers={getattr(self.train_loader, 'num_workers', 0)}"
+                    )
                 try:
                     imgs_rgb, imgs_ir, targets, prev_rgb, prev_ir = next(train_iter)
                 except StopIteration:
@@ -486,6 +511,12 @@ class Trainer:
                     raise RuntimeError(
                         f"Training dataloader failed at epoch {epoch + 1}, batch {i + 1}/{num_batches}."
                     ) from exc
+                self._maybe_log_batch_wait(
+                    epoch=epoch,
+                    iteration_idx=i,
+                    num_batches=num_batches,
+                    elapsed_ms=(time.perf_counter() - batch_fetch_start) * 1000.0,
+                )
                 self.trigger_callbacks('on_batch_begin')
                 if i == 0:
                     print(f'First train batch imgs_rgb.shape: {tuple(imgs_rgb.shape)}')

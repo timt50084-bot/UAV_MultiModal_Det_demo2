@@ -102,7 +102,18 @@ def _normalize_temporal_debug_cfg(performance_cfg):
     normalized['enabled'] = bool(normalized.get('enabled', False))
     normalized['sample_log_interval'] = max(0, int(normalized.get('sample_log_interval', 0)))
     normalized['slow_sample_ms'] = float(normalized.get('slow_sample_ms', 500.0))
+    normalized['slow_stage_ms'] = float(normalized.get('slow_stage_ms', 150.0))
+    normalized['slow_augment_ms'] = float(normalized.get('slow_augment_ms', 200.0))
     normalized['slow_collate_ms'] = float(normalized.get('slow_collate_ms', 200.0))
+    normalized['trace_stage_starts'] = bool(normalized.get('trace_stage_starts', False))
+    normalized['trace_main_process_stages'] = bool(normalized.get('trace_main_process_stages', True))
+    normalized['trace_batch_wait'] = bool(normalized.get('trace_batch_wait', False))
+    normalized['dataloader_wait_ms'] = float(normalized.get('dataloader_wait_ms', 1000.0))
+    normalized['prev_fallback_warning_limit'] = max(1, int(normalized.get('prev_fallback_warning_limit', 5)))
+    normalized['cmcp_max_elapsed_ms'] = float(normalized.get('cmcp_max_elapsed_ms', 120.0))
+    normalized['cmcp_max_small_objects'] = max(0, int(normalized.get('cmcp_max_small_objects', 48)))
+    normalized['mrre_max_elapsed_ms'] = float(normalized.get('mrre_max_elapsed_ms', 80.0))
+    normalized['mrre_max_labels'] = max(0, int(normalized.get('mrre_max_labels', 256)))
     normalized['log_epoch_reset'] = bool(normalized.get('log_epoch_reset', True))
     return normalized
 
@@ -189,7 +200,10 @@ def build_dataloader(cfg, is_training=True):
     dataset_cfg['temporal_stride'] = int(
         temporal_cfg.get('stride', model_cfg.get('temporal_stride', 1))
     )
-    dataset_cfg['temporal_debug'] = temporal_debug_cfg
+    dataset_cfg['temporal_debug'] = dict(
+        temporal_debug_cfg,
+        num_workers=max(0, int(dataloader_cfg.get('num_workers', 0))),
+    )
     dataset = DATASETS.build(dataset_cfg)
     temporal_training = bool(is_training and dataset_cfg.get('use_temporal', False))
 

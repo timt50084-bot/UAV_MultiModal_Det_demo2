@@ -1,4 +1,5 @@
 import random
+import time
 
 import cv2
 import numpy as np
@@ -298,6 +299,30 @@ class MultiModalAugmentationPipeline:
         self.cross_modal_misalignment = CrossModalMisalignment(**cross_modal_misalignment) if cross_modal_misalignment else None
         self.sensor_degradation = SensorDegradationAug(**sensor_degradation) if sensor_degradation else None
 
+    @staticmethod
+    def _log_temporal_debug(debug_context, message):
+        if not isinstance(debug_context, dict) or not debug_context.get('enabled', False):
+            return
+        sample_debug = debug_context.get('sample_debug', '')
+        suffix = f" {sample_debug}" if sample_debug else ''
+        print(f"[TemporalAug] {message}{suffix}")
+
+    def _run_temporal_stage(self, stage_name, fn, debug_context=None, warn_ms=None):
+        stage_start = time.perf_counter()
+        result = fn()
+        elapsed_ms = (time.perf_counter() - stage_start) * 1000.0
+        threshold_ms = (
+            float(debug_context.get('slow_stage_ms', 150.0))
+            if warn_ms is None and isinstance(debug_context, dict)
+            else float(warn_ms or 0.0)
+        )
+        if threshold_ms > 0.0 and elapsed_ms >= threshold_ms:
+            self._log_temporal_debug(
+                debug_context,
+                f"stage={stage_name} elapsed_ms={elapsed_ms:.1f}",
+            )
+        return result
+
     def check_iou_conflict(self, px, py, pw, ph, existing_labels, width, height, iou_thresh=0.1):
         box1 = [px - pw / 2, py - ph / 2, px + pw / 2, py + ph / 2]
         for lbl in existing_labels:
@@ -313,15 +338,34 @@ class MultiModalAugmentationPipeline:
                     return True
         return False
 
-    def apply_cmcp(self, labels, img_rgb, img_ir):
+    def apply_cmcp(self, labels, img_rgb, img_ir, debug_context=None):
         if len(labels) == 0:
             return labels, img_rgb, img_ir
         height, width = img_rgb.shape[:2]
         new_labels = list(labels)
+        cmcp_start = time.perf_counter()
+        max_elapsed_ms = (
+            float(debug_context.get('cmcp_max_elapsed_ms', 0.0))
+            if isinstance(debug_context, dict) else 0.0
+        )
+        max_small_objects = (
+            max(0, int(debug_context.get('cmcp_max_small_objects', 0)))
+            if isinstance(debug_context, dict) else 0
+        )
+        processed_small_objects = 0
+        copied_small_objects = 0
+        stop_reason = None
 
         for lbl in labels:
+            if max_elapsed_ms > 0.0 and ((time.perf_counter() - cmcp_start) * 1000.0) >= max_elapsed_ms:
+                stop_reason = f"budget_exceeded>{max_elapsed_ms:.1f}ms"
+                break
             cls_id, cx, cy, w, h, theta = lbl
             if w < 0.05 and h < 0.05:
+                processed_small_objects += 1
+                if max_small_objects > 0 and processed_small_objects > max_small_objects:
+                    stop_reason = f"small_object_limit>{max_small_objects}"
+                    break
                 abs_w, abs_h = int(w * width), int(h * height)
                 x1, y1 = max(0, int(cx * width) - abs_w // 2), max(0, int(cy * height) - abs_h // 2)
                 x2, y2 = min(width, x1 + abs_w), min(height, y1 + abs_h)
@@ -331,21 +375,52 @@ class MultiModalAugmentationPipeline:
                 patch_rgb, patch_ir = img_rgb[y1:y2, x1:x2].copy(), img_ir[y1:y2, x1:x2].copy()
 
                 for _ in range(10):
+                    if max_elapsed_ms > 0.0 and ((time.perf_counter() - cmcp_start) * 1000.0) >= max_elapsed_ms:
+                        stop_reason = f"budget_exceeded>{max_elapsed_ms:.1f}ms"
+                        break
                     paste_x, paste_y = random.randint(0, width - abs_w), random.randint(0, height - abs_h)
                     paste_cx, paste_cy = paste_x + abs_w / 2, paste_y + abs_h / 2
                     if not self.check_iou_conflict(paste_cx, paste_cy, abs_w, abs_h, new_labels, width, height):
                         img_rgb[paste_y:paste_y + patch_rgb.shape[0], paste_x:paste_x + patch_rgb.shape[1]] = patch_rgb
                         img_ir[paste_y:paste_y + patch_ir.shape[0], paste_x:paste_x + patch_ir.shape[1]] = patch_ir
                         new_labels.append([cls_id, paste_cx / width, paste_cy / height, w, h, theta])
+                        copied_small_objects += 1
                         break
+                if stop_reason:
+                    break
 
+        if stop_reason:
+            self._log_temporal_debug(
+                debug_context,
+                f"cmcp_truncated reason={stop_reason} total_labels={len(labels)} "
+                f"processed_small={processed_small_objects} copied={copied_small_objects}",
+            )
         return np.array(new_labels, dtype=np.float32), img_rgb, img_ir
 
-    def apply_mrre(self, labels, img_rgb, img_ir):
+    def apply_mrre(self, labels, img_rgb, img_ir, debug_context=None):
         if len(labels) == 0:
             return img_rgb, img_ir
         height, width = img_rgb.shape[:2]
+        mrre_start = time.perf_counter()
+        max_elapsed_ms = (
+            float(debug_context.get('mrre_max_elapsed_ms', 0.0))
+            if isinstance(debug_context, dict) else 0.0
+        )
+        max_labels = (
+            max(0, int(debug_context.get('mrre_max_labels', 0)))
+            if isinstance(debug_context, dict) else 0
+        )
+        processed_labels = 0
+        stop_reason = None
+
         for lbl in labels:
+            if max_labels > 0 and processed_labels >= max_labels:
+                stop_reason = f"label_limit>{max_labels}"
+                break
+            if max_elapsed_ms > 0.0 and ((time.perf_counter() - mrre_start) * 1000.0) >= max_elapsed_ms:
+                stop_reason = f"budget_exceeded>{max_elapsed_ms:.1f}ms"
+                break
+            processed_labels += 1
             if random.random() > 0.5:
                 continue
             _, cx, cy, w, h, _ = lbl
@@ -357,6 +432,11 @@ class MultiModalAugmentationPipeline:
             if 0 <= tgt_x < width - abs_w // 2 and 0 <= tgt_y < height - abs_h // 2:
                 img_rgb[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_rgb
                 img_ir[tgt_y:tgt_y + abs_h // 2, tgt_x:tgt_x + abs_w // 2] = bg_patch_ir
+        if stop_reason:
+            self._log_temporal_debug(
+                debug_context,
+                f"mrre_truncated reason={stop_reason} total_labels={len(labels)} processed={processed_labels}",
+            )
         return img_rgb, img_ir
 
     def sample_modality_dropout_config(self):
@@ -399,30 +479,72 @@ class MultiModalAugmentationPipeline:
         img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)
         return img_rgb, img_ir, labels
 
-    def apply_temporal_pair(self, img_rgb, img_ir, prev_rgb, prev_ir, labels, epoch=0, max_epoch=100):
+    def apply_temporal_pair(self, img_rgb, img_ir, prev_rgb, prev_ir, labels, epoch=0, max_epoch=100, debug_context=None):
         progress = min(1.0, max(0.0, epoch / max_epoch))
         if self.enable_cmcp and random.random() < 0.5:
-            labels, img_rgb, img_ir = self.apply_cmcp(labels, img_rgb, img_ir)
+            labels, img_rgb, img_ir = self._run_temporal_stage(
+                'cmcp',
+                lambda: self.apply_cmcp(labels, img_rgb, img_ir, debug_context=debug_context),
+                debug_context=debug_context,
+                warn_ms=float(debug_context.get('slow_augment_ms', 200.0)) if isinstance(debug_context, dict) else None,
+            )
         if self.enable_mrre:
-            img_rgb, img_ir = self.apply_mrre(labels, img_rgb, img_ir)
+            img_rgb, img_ir = self._run_temporal_stage(
+                'mrre',
+                lambda: self.apply_mrre(labels, img_rgb, img_ir, debug_context=debug_context),
+                debug_context=debug_context,
+                warn_ms=float(debug_context.get('slow_augment_ms', 200.0)) if isinstance(debug_context, dict) else None,
+            )
 
         misalignment_config = self.cross_modal_misalignment.sample_config(img_rgb.shape) if self.cross_modal_misalignment else None
         if self.cross_modal_misalignment:
-            img_rgb, img_ir = self.cross_modal_misalignment.apply_config(img_rgb, img_ir, misalignment_config)
-            prev_rgb, prev_ir = self.cross_modal_misalignment.apply_config(prev_rgb, prev_ir, misalignment_config)
+            img_rgb, img_ir = self._run_temporal_stage(
+                'misalignment_current',
+                lambda: self.cross_modal_misalignment.apply_config(img_rgb, img_ir, misalignment_config),
+                debug_context=debug_context,
+            )
+            prev_rgb, prev_ir = self._run_temporal_stage(
+                'misalignment_prev',
+                lambda: self.cross_modal_misalignment.apply_config(prev_rgb, prev_ir, misalignment_config),
+                debug_context=debug_context,
+            )
 
         weather_config = self.weather_sim.sample_weather_config(progress) if self.weather_sim else None
         if self.weather_sim:
-            img_rgb, img_ir = self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config)
-            prev_rgb, prev_ir = self.weather_sim.apply_weather_config(prev_rgb, prev_ir, weather_config)
+            img_rgb, img_ir = self._run_temporal_stage(
+                'weather_current',
+                lambda: self.weather_sim.apply_weather_config(img_rgb, img_ir, weather_config),
+                debug_context=debug_context,
+            )
+            prev_rgb, prev_ir = self._run_temporal_stage(
+                'weather_prev',
+                lambda: self.weather_sim.apply_weather_config(prev_rgb, prev_ir, weather_config),
+                debug_context=debug_context,
+            )
 
         sensor_config = self.sensor_degradation.sample_config() if self.sensor_degradation else None
         if self.sensor_degradation:
-            img_rgb, img_ir = self.sensor_degradation.apply_config(img_rgb, img_ir, sensor_config, frame_seed_offset=0)
-            prev_rgb, prev_ir = self.sensor_degradation.apply_config(prev_rgb, prev_ir, sensor_config, frame_seed_offset=1)
+            img_rgb, img_ir = self._run_temporal_stage(
+                'sensor_current',
+                lambda: self.sensor_degradation.apply_config(img_rgb, img_ir, sensor_config, frame_seed_offset=0),
+                debug_context=debug_context,
+            )
+            prev_rgb, prev_ir = self._run_temporal_stage(
+                'sensor_prev',
+                lambda: self.sensor_degradation.apply_config(prev_rgb, prev_ir, sensor_config, frame_seed_offset=1),
+                debug_context=debug_context,
+            )
 
         modality_dropout = self.sample_modality_dropout_config() if self.enable_modality_dropout else None
-        img_rgb, img_ir = self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout)
-        prev_rgb, prev_ir = self.apply_modality_dropout_config(prev_rgb, prev_ir, modality_dropout)
+        img_rgb, img_ir = self._run_temporal_stage(
+            'dropout_current',
+            lambda: self.apply_modality_dropout_config(img_rgb, img_ir, modality_dropout),
+            debug_context=debug_context,
+        )
+        prev_rgb, prev_ir = self._run_temporal_stage(
+            'dropout_prev',
+            lambda: self.apply_modality_dropout_config(prev_rgb, prev_ir, modality_dropout),
+            debug_context=debug_context,
+        )
 
         return img_rgb, img_ir, prev_rgb, prev_ir, labels
