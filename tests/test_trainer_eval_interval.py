@@ -21,7 +21,7 @@ class _DummyModel(torch.nn.Module):
 
 class _DummyAssigner(torch.nn.Module):
     def forward(self, pred_scores, pred_bboxes, anchor_points, gt_labels, gt_bboxes, mask_gt):
-        target_labels = torch.zeros_like(pred_scores)
+        target_labels = torch.zeros(pred_scores.shape[:2], dtype=torch.long, device=pred_scores.device)
         target_bboxes = torch.zeros_like(pred_bboxes)
         target_scores = torch.zeros_like(pred_scores)
         fg_mask = torch.ones(pred_scores.shape[:2], dtype=torch.bool, device=pred_scores.device)
@@ -36,18 +36,23 @@ class _DummyCriterion(torch.nn.Module):
 
     def forward(
         self,
-        matched_pred_cls,
-        matched_pred_box,
-        matched_tgt_cls,
-        matched_tgt_box,
-        contrastive_loss,
-        epoch,
+        pred_scores,
+        pred_bboxes,
+        target_scores,
+        target_bboxes,
+        fg_mask=None,
+        contrastive_loss=0.0,
+        epoch=0,
         temporal_loss=None,
     ):
-        temporal_loss = temporal_loss if temporal_loss is not None else matched_pred_cls.sum() * 0.0
-        loss_cls = matched_pred_cls.square().mean()
-        loss_reg = matched_pred_box.square().mean()
-        loss_angle = matched_pred_cls.sum() * 0.0
+        temporal_loss = temporal_loss if temporal_loss is not None else pred_scores.sum() * 0.0
+        loss_cls = (pred_scores - target_scores).square().mean()
+        pos_mask = fg_mask.bool() if fg_mask is not None else torch.ones(pred_bboxes.shape[:2], dtype=torch.bool, device=pred_bboxes.device)
+        if bool(pos_mask.any().item()):
+            loss_reg = (pred_bboxes[pos_mask] - target_bboxes[pos_mask]).square().mean()
+        else:
+            loss_reg = pred_bboxes.sum() * 0.0
+        loss_angle = pred_scores.sum() * 0.0
         loss_total = loss_cls + loss_reg + contrastive_loss + temporal_loss
         return loss_total, loss_cls, loss_reg, loss_angle
 
@@ -77,21 +82,23 @@ class _RecordingTemporalCriterion(_DummyCriterion):
 
     def forward(
         self,
-        matched_pred_cls,
-        matched_pred_box,
-        matched_tgt_cls,
-        matched_tgt_box,
-        contrastive_loss,
-        epoch,
+        pred_scores,
+        pred_bboxes,
+        target_scores,
+        target_bboxes,
+        fg_mask=None,
+        contrastive_loss=0.0,
+        epoch=0,
         temporal_loss=None,
     ):
         total_loss, loss_cls, loss_reg, loss_angle = super().forward(
-            matched_pred_cls,
-            matched_pred_box,
-            matched_tgt_cls,
-            matched_tgt_box,
-            contrastive_loss,
-            epoch,
+            pred_scores,
+            pred_bboxes,
+            target_scores,
+            target_bboxes,
+            fg_mask=fg_mask,
+            contrastive_loss=contrastive_loss,
+            epoch=epoch,
             temporal_loss=temporal_loss,
         )
         self.seen_temporal_losses.append(float(temporal_loss.detach().item()))

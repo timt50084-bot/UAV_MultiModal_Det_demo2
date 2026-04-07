@@ -252,5 +252,7 @@ class DynamicTinyOBBAssigner(nn.Module):
         b_idx, a_idx = torch.where(valid_mask)
         l_idx = target_labels[valid_mask].long()
         target_scores[b_idx, a_idx, l_idx] = soft_target_scores[valid_mask]
+        target_labels = target_labels.masked_fill(~is_pos_mask, self.num_classes)
+        target_bboxes = target_bboxes * is_pos_mask.unsqueeze(-1).to(target_bboxes.dtype)
 
         return is_pos_mask, target_labels, target_bboxes, target_scores

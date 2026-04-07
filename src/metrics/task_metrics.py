@@ -101,10 +101,15 @@ def normalize_eval_metrics_cfg(cfg):
             nested_cfg.get('obb_iou_backend', 'gpu_prob'),
         )
     )
+    report_conf_threshold = root_cfg.get(
+        'report_conf_threshold',
+        nested_cfg.get('report_conf_threshold', 0.25),
+    )
 
     return {
         'enabled': bool(enabled),
         'obb_iou_backend': obb_iou_backend,
+        'report_conf_threshold': float(report_conf_threshold),
         'small_object': small_object,
         'cross_modal_robustness': cross_modal,
         'temporal_stability': temporal,

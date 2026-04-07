@@ -94,6 +94,10 @@ loss:
   num_classes: 5
   alpha: 0.25
   gamma: 2.0
+  # Soft-label friendly classification loss applied on all anchors.
+  # `varifocal` uses assigner target_scores for positives and 0 for negatives
+  # without changing the detector head / checkpoint structure.
+  cls_loss_type: 'varifocal'
   use_scale_weight: True
   # Optional auxiliary angle supervision for the OBB angle branch.
   # Disabled by default so the training path stays equivalent to the current
@@ -132,6 +136,8 @@ performance:
 
 val:
   nms:
+    # Keep this low for AP candidate collection. Reported Precision / Recall
+    # are controlled separately by eval.report_conf_threshold below.
     conf_thres: 0.001
     iou_thres: 0.45
     max_det: 300
@@ -141,6 +147,9 @@ eval:
   # Detection evaluator selector. CUDA-backed `gpu` is the only supported
   # detection evaluator path.
   evaluator: 'gpu'
+  # Precision / Recall reporting threshold used in logs. This does not change
+  # the low candidate threshold used to collect predictions for AP/mAP.
+  report_conf_threshold: 0.25
   # Detection-side OBB IoU backend selector. `gpu_prob` is the only supported
   # detection backend and remains a ProbIoU surrogate rather than exact polygon
   # IoU.

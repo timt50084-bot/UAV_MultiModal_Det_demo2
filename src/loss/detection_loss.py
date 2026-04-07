@@ -63,7 +63,8 @@ class UAVDualModalLoss(nn.Module):
                  temporal_weight=0.1, temporal_low_motion_bias=0.75,
                  temporal_warmup_epochs=0.0, temporal_ramp_epochs=0.0,
                  temporal_max_loss=None, temporal_skip_loss_threshold=None,
-                 angle_enabled=False, angle_weight=0.0, angle_type='wrapped_smooth_l1', angle_beta=0.1):
+                 angle_enabled=False, angle_weight=0.0, angle_type='wrapped_smooth_l1', angle_beta=0.1,
+                 cls_loss_type='varifocal'):
         super().__init__()
         self.nc = num_classes
         self.use_scale_weight = use_scale_weight
@@ -84,6 +85,9 @@ class UAVDualModalLoss(nn.Module):
         self.angle_weight = float(angle_weight)
         self.angle_type = str(angle_type)
         self.angle_beta = float(angle_beta)
+        self.cls_loss_type = str(cls_loss_type).lower()
+        if self.cls_loss_type not in {'focal', 'varifocal'}:
+            raise ValueError(f'Unsupported cls loss type: {self.cls_loss_type}')
 
     def _focal_loss(self, pred_logits, targets):
         bce_loss = self.cls_loss_focal(pred_logits, targets)
@@ -91,6 +95,28 @@ class UAVDualModalLoss(nn.Module):
         p_t = probas * targets + (1 - probas) * (1 - targets)
         focal_weight = (self.alpha * targets + (1 - self.alpha) * (1 - targets)) * ((1 - p_t) ** self.gamma)
         return focal_weight * bce_loss
+
+    def _varifocal_loss(self, pred_logits, targets):
+        bce_loss = self.cls_loss_focal(pred_logits, targets)
+        pred_prob = torch.sigmoid(pred_logits)
+        focal_weight = self.alpha * pred_prob.pow(self.gamma) * (1.0 - targets) + targets
+        return focal_weight * bce_loss
+
+    def _compute_cls_loss_raw(self, pred_logits, targets):
+        if self.cls_loss_type == 'focal':
+            return self._focal_loss(pred_logits, targets)
+        if self.cls_loss_type == 'varifocal':
+            return self._varifocal_loss(pred_logits, targets)
+        raise ValueError(f'Unsupported cls loss type: {self.cls_loss_type}')
+
+    @staticmethod
+    def _reduce_normalizer(value):
+        if value.ndim == 0:
+            value = value.unsqueeze(0)
+        value = value.detach().clone()
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(value, op=dist.ReduceOp.SUM)
+        return torch.clamp(value.squeeze(0), min=1.0)
 
     @staticmethod
     def wrapped_angle_difference(pred_theta, target_theta):
@@ -112,8 +138,9 @@ class UAVDualModalLoss(nn.Module):
             return 1.0 - torch.cos(2.0 * wrapped_delta)
         raise ValueError(f'Unsupported angle loss type: {self.angle_type}')
 
-    def forward(self, matched_pred_cls, matched_pred_box, matched_tgt_cls, matched_tgt_box,
-                contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
+    def _forward_matched(self, matched_pred_cls, matched_pred_box, matched_tgt_cls, matched_tgt_box,
+                         contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
+        matched_tgt_box = matched_tgt_box.to(device=matched_pred_box.device, dtype=matched_pred_box.dtype)
         if not torch.is_tensor(contrastive_loss):
             contrastive_loss = matched_pred_box.new_tensor(float(contrastive_loss))
         if not torch.is_tensor(temporal_loss):
@@ -130,10 +157,9 @@ class UAVDualModalLoss(nn.Module):
             iou_weight = prob_iou.detach().clamp(min=0.2)
         loss_cls_raw = loss_cls_raw * iou_weight
 
-        num_pos = torch.tensor([matched_pred_box.size(0)], dtype=torch.float32, device=matched_pred_box.device)
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(num_pos, op=dist.ReduceOp.SUM)
-        num_pos = torch.clamp(num_pos, min=1.0).item()
+        num_pos = self._reduce_normalizer(
+            torch.tensor([matched_pred_box.size(0)], dtype=torch.float32, device=matched_pred_box.device)
+        ).item()
 
         if self.use_scale_weight:
             tgt_area = torch.clamp(matched_tgt_box[:, 2] * matched_tgt_box[:, 3], min=1e-6)
@@ -165,3 +191,88 @@ class UAVDualModalLoss(nn.Module):
             + temporal_loss
         )
         return total_loss, loss_cls, loss_reg, loss_angle
+
+    def _forward_dense(self, pred_scores, pred_bboxes, target_scores, target_bboxes, fg_mask,
+                       contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
+        reference_tensor = pred_scores if pred_scores.numel() > 0 else pred_bboxes
+        if not torch.is_tensor(contrastive_loss):
+            contrastive_loss = reference_tensor.new_tensor(float(contrastive_loss))
+        if not torch.is_tensor(temporal_loss):
+            temporal_loss = reference_tensor.new_tensor(float(temporal_loss))
+        contrastive_loss = torch.nan_to_num(contrastive_loss, nan=0.0, posinf=0.0, neginf=0.0)
+        temporal_loss = torch.nan_to_num(temporal_loss, nan=0.0, posinf=0.0, neginf=0.0)
+
+        target_scores = target_scores.to(device=pred_scores.device, dtype=pred_scores.dtype)
+        target_bboxes = target_bboxes.to(device=pred_bboxes.device, dtype=pred_bboxes.dtype)
+        fg_mask = fg_mask.to(device=pred_scores.device, dtype=torch.bool)
+
+        cls_loss_raw = self._compute_cls_loss_raw(pred_scores, target_scores).sum(-1)
+        num_pos = self._reduce_normalizer(fg_mask.sum(dtype=pred_scores.dtype))
+
+        zero_term = pred_bboxes.sum() * 0.0
+        loss_reg = zero_term
+        loss_angle = zero_term
+        cls_anchor_weights = torch.ones_like(cls_loss_raw)
+
+        if bool(fg_mask.any().item()):
+            matched_pred_box = pred_bboxes[fg_mask]
+            matched_tgt_box = target_bboxes[fg_mask]
+            loss_reg_raw, _ = self.prob_iou_loss(matched_pred_box, matched_tgt_box)
+
+            scale_weights = None
+            if self.use_scale_weight:
+                tgt_area = torch.clamp(matched_tgt_box[:, 2] * matched_tgt_box[:, 3], min=1e-6)
+                scale_weights = torch.clamp(1.0 / torch.sqrt(tgt_area), min=1.0, max=3.0).detach()
+                cls_anchor_weights[fg_mask] = scale_weights.to(cls_anchor_weights.dtype)
+                loss_reg = (loss_reg_raw * scale_weights).sum() / num_pos
+            else:
+                loss_reg = loss_reg_raw.sum() / num_pos
+
+            if self.angle_enabled and self.angle_weight > 0.0:
+                loss_angle_raw = self._compute_angle_loss_raw(matched_pred_box[:, 4], matched_tgt_box[:, 4])
+                if scale_weights is not None:
+                    loss_angle = (loss_angle_raw * scale_weights).sum() / num_pos
+                else:
+                    loss_angle = loss_angle_raw.sum() / num_pos
+
+        loss_cls = (cls_loss_raw * cls_anchor_weights).sum() / num_pos
+
+        weight_cls = 2.0 if epoch < 5 else 1.0
+        weight_reg = 1.0 if epoch < 5 else 2.0
+
+        total_loss = (
+            loss_cls * weight_cls
+            + loss_reg * weight_reg
+            + loss_angle * self.angle_weight
+            + contrastive_loss
+            + temporal_loss
+        )
+        return total_loss, loss_cls, loss_reg, loss_angle
+
+    def forward(self, pred_scores, pred_bboxes, target_scores_or_labels, target_bboxes,
+                fg_mask=None, contrastive_loss=0.0, epoch=0, temporal_loss=0.0):
+        dense_target_path = (
+            fg_mask is not None
+            and torch.is_tensor(target_scores_or_labels)
+            and target_scores_or_labels.shape == pred_scores.shape
+        )
+        if dense_target_path:
+            return self._forward_dense(
+                pred_scores,
+                pred_bboxes,
+                target_scores_or_labels,
+                target_bboxes,
+                fg_mask,
+                contrastive_loss=contrastive_loss,
+                epoch=epoch,
+                temporal_loss=temporal_loss,
+            )
+        return self._forward_matched(
+            pred_scores,
+            pred_bboxes,
+            target_scores_or_labels,
+            target_bboxes,
+            contrastive_loss=contrastive_loss,
+            epoch=epoch,
+            temporal_loss=temporal_loss,
+        )

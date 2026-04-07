@@ -50,6 +50,7 @@ class GPUOBBMetricsEvaluator:
                 f"but received '{self.obb_iou_backend_name}'."
             )
         self.keep_cpu_artifacts = bool(self.extra_metrics_cfg['error_analysis'].get('enabled', False))
+        self.report_conf_threshold = float(self.extra_metrics_cfg.get('report_conf_threshold', 0.25))
         self.small_area_thresh = resolve_small_area_threshold(
             self.extra_metrics_cfg['small_object'].get('area_threshold', np.sqrt(float(small_area_thresh)))
         )
@@ -127,7 +128,8 @@ class GPUOBBMetricsEvaluator:
                             'bbox': gt[1:6],
                         })
 
-    def _compute_detection_metrics(self, pred_rows, gt_rows, iou_thresh=0.5, eval_small_only=False, iou_backend=None):
+    def _compute_detection_metrics(self, pred_rows, gt_rows, iou_thresh=0.5, eval_small_only=False,
+                                   score_threshold=None, iou_backend=None):
         aps = []
         precisions = []
         recalls = []
@@ -139,6 +141,8 @@ class GPUOBBMetricsEvaluator:
         for class_id in range(self.nc):
             class_preds = pred_rows[pred_rows[:, 1].long() == class_id]
             class_gts = gt_rows[gt_rows[:, 1].long() == class_id]
+            if score_threshold is not None:
+                class_preds = class_preds[class_preds[:, 2] >= float(score_threshold)]
             if eval_small_only:
                 class_gts = class_gts[(class_gts[:, 4] * class_gts[:, 5]) < float(self.small_area_thresh)]
 
@@ -224,12 +228,21 @@ class GPUOBBMetricsEvaluator:
             eval_small_only=False,
             iou_backend=iou_backend,
         )
+        report_metrics = self._compute_detection_metrics(
+            pred_rows,
+            gt_rows,
+            iou_thresh=0.5,
+            eval_small_only=False,
+            score_threshold=self.report_conf_threshold,
+            iou_backend=iou_backend,
+        )
 
         metrics = {
             'mAP_50': detection_metrics['mAP'],
             'mAP_50_95': self._compute_map_range(pred_rows, gt_rows, iou_backend=iou_backend),
-            'Precision': detection_metrics['Precision'],
-            'Recall': detection_metrics['Recall'],
+            'Precision': report_metrics['Precision'],
+            'Recall': report_metrics['Recall'],
+            'ReportConfThreshold': float(self.report_conf_threshold),
         }
 
         if self.extra_metrics_cfg['small_object'].get('enabled', True):

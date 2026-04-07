@@ -601,31 +601,23 @@ class Trainer:
                             iteration_idx=i,
                         )
 
-                    matched_pred_box = None
-                    if pos_mask.any():
-                        matched_pred_cls = pred_scores[pos_mask]
-                        matched_pred_box = pred_bboxes[pos_mask]
-                        matched_tgt_cls = target_labels[pos_mask]
-                        matched_tgt_box = target_bboxes[pos_mask]
-                        loss_total_raw, loss_cls, loss_reg, loss_angle = self.criterion(
-                            matched_pred_cls,
-                            matched_pred_box,
-                            matched_tgt_cls,
-                            matched_tgt_box,
-                            contrastive_loss,
-                            epoch,
-                            temporal_loss=temporal_loss,
-                        )
-                        zero_pos_reason = None
-                    else:
-                        loss_cls = zero_term
-                        loss_reg = zero_term
-                        loss_angle = zero_term
-                        loss_total_raw = zero_term + contrastive_loss + temporal_loss
+                    matched_pred_box = pred_bboxes[pos_mask] if bool(pos_mask.any().item()) else None
+                    loss_total_raw, loss_cls, loss_reg, loss_angle = self.criterion(
+                        pred_scores,
+                        pred_bboxes,
+                        target_scores,
+                        target_bboxes,
+                        fg_mask=fg_mask,
+                        contrastive_loss=contrastive_loss,
+                        epoch=epoch,
+                        temporal_loss=temporal_loss,
+                    )
+                    zero_pos_reason = None
+                    if num_pos == 0:
                         zero_pos_reason = (
                             'assigner returned zero positives for a non-empty GT batch'
                             if batch_gt_count > 0 else
-                            'batch has no GT labels'
+                            'batch has no GT labels; cls loss falls back to all-negative supervision'
                         )
 
                     loss_total = loss_total_raw / self.accumulate

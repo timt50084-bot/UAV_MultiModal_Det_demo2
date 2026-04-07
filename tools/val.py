@@ -162,6 +162,10 @@ def main():
 
     print('\nFinal metrics')
     print('-' * 48)
+    if 'EvalCandidateConfThreshold' in metrics:
+        print(f"AP candidate conf: {metrics['EvalCandidateConfThreshold']:.3f}")
+    if 'ReportConfThreshold' in metrics:
+        print(f"Report P/R conf: {metrics['ReportConfThreshold']:.3f}")
     print(f"mAP_50: {metrics.get('mAP_50', 0.0) * 100:.2f}%")
     print(f"mAP_50_95: {metrics.get('mAP_50_95', 0.0) * 100:.2f}%")
     print(f"Precision: {metrics.get('Precision', 0.0) * 100:.2f}%")

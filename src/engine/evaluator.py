@@ -24,6 +24,7 @@ class Evaluator:
         self.metrics_evaluator = metrics_evaluator
         self.nms_kwargs = nms_kwargs or {'conf_thres': 0.001, 'iou_thres': 0.45, 'max_det': 300}
         self.extra_metrics_cfg = normalize_eval_metrics_cfg(extra_metrics_cfg)
+        self.report_conf_threshold = float(self.extra_metrics_cfg.get('report_conf_threshold', 0.25))
         dataset = getattr(dataloader, 'dataset', None)
         dataset_imgsz = getattr(dataset, 'img_size', getattr(dataset, 'imgsz', 1024)) if dataset is not None else 1024
         self.infer_cfg = normalize_infer_cfg(infer_cfg, default_imgsz=dataset_imgsz, nms_cfg=self.nms_kwargs)
@@ -239,6 +240,8 @@ class Evaluator:
         baseline_metrics = self._run_eval_pass(model, epoch=epoch, desc_prefix='Val')
         baseline_artifacts = self._snapshot_eval_artifacts()
         metrics = dict(baseline_metrics)
+        metrics['EvalCandidateConfThreshold'] = float(self.infer_cfg['conf_threshold'])
+        metrics['ReportConfThreshold'] = float(metrics.get('ReportConfThreshold', self.report_conf_threshold))
 
         robustness_cfg = self.extra_metrics_cfg['cross_modal_robustness']
         rgb_artifacts = None
@@ -285,11 +288,15 @@ class Evaluator:
                 metrics['ErrorAnalysisFiles'] = analysis['exported_files']
 
         if self.rank == 0:
+            candidate_conf = float(metrics.get('EvalCandidateConfThreshold', self.infer_cfg['conf_threshold']))
+            report_conf = float(metrics.get('ReportConfThreshold', self.report_conf_threshold))
             report_parts = [
+                f"AP candidate conf: {candidate_conf:.3f}",
+                f"Report P/R conf: {report_conf:.3f}",
                 f"mAP@0.5: {metrics.get('mAP_50', 0):.4f}",
                 f"mAP@0.5:0.95: {metrics.get('mAP_50_95', 0):.4f}",
-                f"P: {metrics.get('Precision', 0):.4f}",
-                f"R: {metrics.get('Recall', 0):.4f}",
+                f"P@{report_conf:.2f}: {metrics.get('Precision', 0):.4f}",
+                f"R@{report_conf:.2f}: {metrics.get('Recall', 0):.4f}",
             ]
             if 'mAP_S' in metrics:
                 report_parts.append(f"AP_S: {metrics['mAP_S']:.4f}")
